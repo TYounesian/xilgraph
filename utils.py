@@ -14,6 +14,8 @@ from torch_geometric.explain import Explainer
 from graphxai.explainers import GradExplainer, GradCAM
 from torch_geometric.explain.algorithm import CaptumExplainer
 from torch_geometric.data import Batch
+from captum.attr import IntegratedGradients
+from torch_geometric.nn import to_captum_model, to_captum_input
 
 
 def sample_colors(n: int, probs: torch.Tensor) -> torch.Tensor:
@@ -342,40 +344,52 @@ def average_precision(node_imp: torch.Tensor, motif_nodes: torch.Tensor):
 
 
 def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradients"):
-        explainer = Explainer(
-            model=model,
-            algorithm=CaptumExplainer(method),  # "IntegratedGradients" | "Saliency" | "DeepLift" | ...
-            explanation_type='model',
-            node_mask_type='attributes',  # node-feature attribution
-            edge_mask_type='object',  # edge mask attribution
-            model_config=dict(
-                mode='multiclass_classification',
-                task_level='graph',
-                return_type='raw',  # model returns logits
-            ),
-        )
+        # explainer = Explainer(
+        #     model=model,
+        #     algorithm=CaptumExplainer(method),  # "IntegratedGradients" | "Saliency" | "DeepLift" | ...
+        #     explanation_type='model',
+        #     node_mask_type='attributes',  # node-feature attribution
+        #     edge_mask_type='object',  # edge mask attribution
+        #     model_config=dict(
+        #         mode='multiclass_classification',
+        #         task_level='graph',
+        #         return_type='raw',  # model returns logits
+        #     ),
+        # )
         total_hit_n = 0.
         total_hit_e = 0.
         graphs_iter = graphs if isinstance(graphs, (list, tuple)) else [graphs]
         for i, g in enumerate(graphs_iter[:min(num_samples, len(graphs_iter))]):
             b = Batch.from_data_list([g])
-            with torch.no_grad():
-                logits = model(b.x, b.edge_index, b.batch)
+            # with torch.no_grad():
+            # ig = IntegratedGradients(model)
+            logits = model(b.x, b.edge_index, b.batch)
 
-            target = logits.argmax(dim=-1).item()  # explain predicted class (or use g.y.item())
+            mask_type = "node"
+            captum_model = to_captum_model(model, mask_type)
+            inputs, additional_forward_args = to_captum_input(b.x,
+                                                              b.edge_index, mask_type)
 
-            exp = explainer(
-                x=b.x,
-                edge_index=b.edge_index,
-                batch=b.batch,
-                target=target,
-            )
+            additional_forward_args = (*additional_forward_args, b.batch)
+
+            ig = IntegratedGradients(captum_model)
+            ig_attr = ig.attribute(inputs=inputs,
+                                   target=int(b.y),
+                                   additional_forward_args=additional_forward_args,
+                                   internal_batch_size=1)
+            #
+            # exp = explainer(
+            #     x=b.x,
+            #     edge_index=b.edge_index,
+            #     batch=b.batch,
+            #     target=target,
+            # )
     #
-            node_imp = exp.node_mask.abs().sum(dim=1)  # aggregate feature importance → [N]
+            node_imp = ig_attr[0].squeeze().abs().sum(dim=1) #exp.node_mask.abs().sum(dim=1)  # aggregate feature importance → [N]
             node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-12)
-            edge_imp = exp.edge_mask.detach().cpu()
+            # edge_imp = exp.edge_mask.detach().cpu()
             topk_nodes = torch.topk(node_imp, k=max(1, int(0.2 * node_imp.numel()))).indices.tolist()
-            topk_edges = torch.topk(edge_imp, k=min(10, edge_imp.numel())).indices.tolist()
+            # topk_edges = torch.topk(edge_imp, k=min(10, edge_imp.numel())).indices.tolist()
             # print(f"[Captum][Graph {i}] target={target} | top nodes: {topk_nodes} | top edge idx: {topk_edges}")
 
             # check overlap:
@@ -385,7 +399,7 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
                 hit_n = torch.isin(torch.as_tensor(topk_nodes), motif_n).float().mean().item()
                 total_hit_n += hit_n
                 motif_e = torch.as_tensor(g.motif_edge_ids)
-                hit_e = torch.isin(torch.as_tensor(topk_edges), motif_e).float().mean().item()
+                hit_e = 0 #torch.isin(torch.as_tensor(topk_edges), motif_e).float().mean().item()
                 total_hit_e += hit_e
                 # plot_node_importance(g, motif_n, node_imp, title="Captum Node Importance")
                 # print(f"motif node hit@top20% = {hit_n:.3f}, motif edge hit@top20% = {hit_e:.3f}")

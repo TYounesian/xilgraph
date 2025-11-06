@@ -16,7 +16,7 @@ graph_colors = list(CID.values())[0:-2]
 # class target colors
 target_colors = random.sample(graph_colors[-2:], k=2)
 
-EPOCHS = 10
+EPOCHS = 50
 runs = 1
 
 mode = 'passive-exp' # or 'no-supervision'
@@ -55,6 +55,7 @@ for run in range(runs):
     # model = GAT().to(DEVICE)
     opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss()
+    criterion_bce = nn.BCELoss()
     if mode == 'no-supervision':
         for epoch in range(1, EPOCHS + 1):
             tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, train=True)
@@ -88,7 +89,7 @@ for run in range(runs):
     elif mode == 'passive-exp':
         for epoch in range(1, EPOCHS + 1):
             total_loss = 0
-            total_ce = 0
+            total_expl = 0
             model.train()
             correct = 0.
             total = 0.
@@ -103,7 +104,7 @@ for run in range(runs):
                 ce_loss = criterion(out, g.y.view(-1))
 
                 expl_loss = 0.0
-                if torch.rand(()) < 0.1 and hasattr(g, "motif_node_ids"):
+                if torch.rand(()) < 0.5 and hasattr(g, "motif_node_ids"):
                     # get Captum explanation for this graph
                     node_imp, n_hit, _ = captum_explain_graphs(model, g, num_samples=1, method="IntegratedGradients")
                     # if epoch % 5 == 0: # or epoch == 1:
@@ -115,17 +116,17 @@ for run in range(runs):
                     gt_mask[g.motif_node_ids] = 1.
 
                     # explanation loss (BCE style)
-                    expl_loss = F.binary_cross_entropy(node_imp, gt_mask)
+                    expl_loss = criterion_bce(node_imp, gt_mask)
 
                 loss = ce_loss + expl_loss
                 loss.backward()
                 opt.step()
                 opt.zero_grad()
-                total_loss += float(loss)
-                total_ce += float(0.8 * expl_loss)
+                total_loss += float(loss.detach())
+                total_expl += float(expl_loss)
             tr_acc = correct / max(total, 1)
             total_loss = total_loss / max(total, 1)
-            total_ce = total_ce / total
+            total_expl = total_expl / total
             tr_average_n_hit = average_n_hit / cnt
 
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False)
@@ -134,7 +135,7 @@ for run in range(runs):
 
             if epoch % 5 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
-                      f"train loss {total_loss:.3f} expl loss {total_ce:.3f} acc {tr_acc:.3f} | val loss "
+                      f"train loss {total_loss:.3f} expl loss {total_expl:.3f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f}")
                 print(f"train average motif hit: {tr_average_n_hit}| val average motif hit {val_average_n_hit}")
 
