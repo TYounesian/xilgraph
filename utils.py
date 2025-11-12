@@ -396,7 +396,7 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
 
             if hasattr(g, "motif_node_ids"):
                 motif_n = torch.as_tensor(g.motif_node_ids)
-                hit_n = torch.isin(torch.as_tensor(topk_nodes), motif_n).float().mean().item()
+                hit_n = torch.isin(motif_n, torch.as_tensor(topk_nodes)).sum().item()/len(motif_n)
                 total_hit_n += hit_n
                 motif_e = torch.as_tensor(g.motif_edge_ids)
                 hit_e = 0 #torch.isin(torch.as_tensor(topk_edges), motif_e).float().mean().item()
@@ -559,3 +559,13 @@ def plot_g_tree(g, trees, CID):
     plt.tight_layout()
     plt.show()
 
+
+def saliency_to_probs_single(node_imp: torch.Tensor, tau: float = 0.25):
+    return torch.softmax(node_imp / tau, dim=0)
+
+
+def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
+    mask = mask.bool()
+    q = torch.zeros_like(mask, dtype=torch.float)
+    q[mask] = 1.0 / mask.sum()
+    return q.clamp_min(eps)

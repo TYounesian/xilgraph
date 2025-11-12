@@ -46,14 +46,14 @@ train_set = graphs_by_splits['train']
 val_set = graphs_by_splits['val']
 test_set = graphs_by_splits['test']
 
-train_loader = DataLoader(train_set, batch_size=16, shuffle=True)
-val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
-test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
+train_loader = DataLoader(train_set, batch_size=1, shuffle=True)
+val_loader = DataLoader(val_set, batch_size=1, shuffle=False)
+test_loader = DataLoader(test_set, batch_size=1, shuffle=False)
 
 for run in range(runs):
     model = GCN().to(DEVICE)
     # model = GAT().to(DEVICE)
-    opt = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=5e-4)
+    opt = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=5e-4)
     criterion = nn.CrossEntropyLoss()
     criterion_bce = nn.BCELoss()
     if mode == 'no-supervision':
@@ -104,7 +104,9 @@ for run in range(runs):
                 ce_loss = criterion(out, g.y.view(-1))
 
                 expl_loss = 0.0
-                if torch.rand(()) < 0.5 and hasattr(g, "motif_node_ids"):
+                lam_base = 100
+                lam = 0
+                if torch.rand(()) < 0.1 and hasattr(g, "motif_node_ids"):
                     # get Captum explanation for this graph
                     node_imp, n_hit, _ = captum_explain_graphs(model, g, num_samples=1, method="IntegratedGradients")
                     # if epoch % 5 == 0: # or epoch == 1:
@@ -112,13 +114,23 @@ for run in range(runs):
 
                     average_n_hit += n_hit
                     cnt += 1
-                    # ground truth mask (0/1)
                     gt_mask[g.motif_node_ids] = 1.
 
-                    # explanation loss (BCE style)
-                    expl_loss = criterion_bce(node_imp, gt_mask)
+                    # explanation loss
+                    pos = gt_mask.sum().clamp_min(1.0)
+                    neg = (1 - gt_mask).sum().clamp_min(1.0)
+                    pos_weight = (neg / pos)  # >1 if positives are rare
+                    w = torch.ones_like(gt_mask)
+                    w[gt_mask == 1] = pos_weight  # emphasize positives
 
-                loss = ce_loss + expl_loss
+                    expl_loss = F.binary_cross_entropy(node_imp, gt_mask, weight=w)
+                    p = saliency_to_probs_single(node_imp, tau=0.25)
+                    q = soft_target_from_mask_single(gt_mask)
+
+                    # expl_loss = F.kl_div(p.log(), q, reduction="batchmean")
+                    # lam = lam_base * (1 + epoch / 10)
+
+                loss = ce_loss + 0.1 * expl_loss
                 loss.backward()
                 opt.step()
                 opt.zero_grad()
@@ -126,8 +138,8 @@ for run in range(runs):
                 total_expl += float(expl_loss)
             tr_acc = correct / max(total, 1)
             total_loss = total_loss / max(total, 1)
-            total_expl = total_expl / total
-            tr_average_n_hit = average_n_hit / cnt
+            total_expl = total_expl / cnt if cnt > 0 else 0
+            tr_average_n_hit = average_n_hit / cnt if cnt > 0 else 0
 
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False)
             _, val_average_n_hit, average_e_hit = captum_explain_graphs(model, val_set, num_samples=len(val_set),
