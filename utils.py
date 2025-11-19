@@ -14,8 +14,10 @@ from torch_geometric.explain import Explainer
 from graphxai.explainers import GradExplainer, GradCAM
 from torch_geometric.explain.algorithm import CaptumExplainer
 from torch_geometric.data import Batch
-from captum.attr import IntegratedGradients
+from captum.attr import IntegratedGradients, Saliency
 from torch_geometric.nn import to_captum_model, to_captum_input
+import numpy as np
+from sklearn.metrics import roc_auc_score
 
 
 def sample_colors(n: int, probs: torch.Tensor) -> torch.Tensor:
@@ -182,6 +184,10 @@ def make_graph(trees, G, CID, target_colors, split: str):
     data.motif_edge_ids = motif_edge_ids.long().contiguous()
     if attach_id is not None:
         data.attach_id = attach_id
+    mask = torch.zeros(len(x), dtype=torch.float)
+    if hasattr(data, "motif_node_ids"):
+        mask[data.motif_node_ids] = 1.0
+    data.motif_node_mask = mask
 
     return data
 
@@ -361,9 +367,6 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
         graphs_iter = graphs if isinstance(graphs, (list, tuple)) else [graphs]
         for i, g in enumerate(graphs_iter[:min(num_samples, len(graphs_iter))]):
             b = Batch.from_data_list([g])
-            # with torch.no_grad():
-            # ig = IntegratedGradients(model)
-            logits = model(b.x, b.edge_index, b.batch)
 
             mask_type = "node"
             captum_model = to_captum_model(model, mask_type)
@@ -372,11 +375,11 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
 
             additional_forward_args = (*additional_forward_args, b.batch)
 
-            ig = IntegratedGradients(captum_model)
+            ig = Saliency(captum_model)
             ig_attr = ig.attribute(inputs=inputs,
                                    target=int(b.y),
-                                   additional_forward_args=additional_forward_args,
-                                   internal_batch_size=1)
+                                   additional_forward_args=additional_forward_args) #,
+                                   #internal_batch_size=1)
             #
             # exp = explainer(
             #     x=b.x,
@@ -385,8 +388,10 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
             #     target=target,
             # )
     #
-            node_imp = ig_attr[0].squeeze().abs().sum(dim=1) #exp.node_mask.abs().sum(dim=1)  # aggregate feature importance → [N]
-            node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-12)
+            node_imp = (ig_attr[0].squeeze().pow(2).sum(dim=1) + 1e-9).sqrt() #ig_attr[0].squeeze().abs().sum(dim=1) #exp.node_mask.abs().sum(dim=1)  # aggregate feature importance → [N]
+            m, M = node_imp.min().detach(), node_imp.max().detach()
+            node_imp = (node_imp - m) / (M - m + node_imp)
+            # node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-12)
             # edge_imp = exp.edge_mask.detach().cpu()
             topk_nodes = torch.topk(node_imp, k=max(1, int(0.2 * node_imp.numel()))).indices.tolist()
             # topk_edges = torch.topk(edge_imp, k=min(10, edge_imp.numel())).indices.tolist()
@@ -569,3 +574,50 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
     q = torch.zeros_like(mask, dtype=torch.float)
     q[mask] = 1.0 / mask.sum()
     return q.clamp_min(eps)
+
+
+def saliency_grad_diff(model, batch):
+    model.eval()
+    x = batch.x.requires_grad_(True)
+
+    logits = model(x, batch.edge_index, batch.batch)
+    B, C = logits.shape
+    target = batch.y.to(logits.device).long()
+    idx = torch.arange(B, device=logits.device)
+
+    scalar = logits[idx, target].sum()
+    grads = torch.autograd.grad(
+        scalar, x,
+        create_graph=True,
+        retain_graph=True
+    )[0]
+    model.train()
+    node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
+
+    # topk_nodes = torch.topk(node_imp2, k=max(1, int(0.2 * node_imp2.numel()))).indices.tolist()
+
+    hits = []
+    aucs = []
+    node_imp2 = node_imp.clone()
+    for g_id in batch.batch.unique():
+        m = (batch.batch == g_id)  # nodes of this graph
+        node_imp_g = node_imp2[m]  # [N_g]
+        motif_mask_g = batch.motif_node_mask[m].bool()
+        motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
+
+        mi, ma = node_imp_g.min().detach(), node_imp_g.max().detach()
+        node_imp2[m] = (node_imp_g - mi) / (ma - mi + node_imp_g)
+        topk_local = torch.topk(node_imp_g, k=max(1, int(0.2 * node_imp_g.numel()))).indices
+
+        hit_n = torch.isin(motif_idx_g, topk_local).float().mean().item()
+        hits.append(hit_n)
+
+        auc = roc_auc_score(motif_mask_g.numpy().astype(np.int32), node_imp[m].detach().numpy().astype(np.float32))
+        aucs.append(auc)
+
+    # if hasattr(g, "motif_node_ids"):
+    #     motif_n = torch.as_tensor(g.motif_node_ids)
+    #     hit_n = torch.isin(motif_n, torch.as_tensor(topk_nodes)).sum().item() / len(motif_n)
+
+    saliency = grads.abs()
+    return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
