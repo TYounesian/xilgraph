@@ -3,12 +3,14 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 from utils import *
 from models import *
-import wandb
+# import wandb
 from tap import Tap
+
+torch.set_num_threads(6)
 
 
 SEED = 42
-DEVICE = "cpu"
+DEVICE = "cuda:0"
 n_tree = 6
 NUM_GRAPHS = 1000
 N_NODES = 50          # base graph size
@@ -22,7 +24,7 @@ target_colors = random.sample(graph_colors[-2:], k=2)
 
 
 class Arguments(Tap):
-    epochs: int = 150
+    epochs: int = 500
     runs: int = 1
     lr: float = 1e-4
     supervision_rate: float = 0.1
@@ -33,10 +35,10 @@ class Arguments(Tap):
 
 
 def run_exp(args: Arguments):
-    wandb.init(project='xilgraph',
-               entity='xilgraph',
-               mode='online' if args.log_wandb else 'disabled',
-               config=args.as_dict())
+    # wandb.init(project='xilgraph',
+    #            entity='xilgraph',
+    #            mode='online' if args.log_wandb else 'disabled',
+    #            config=args.as_dict())
     # Generate a tree for each class
     trees = generate_trees(n_tree, tree_colors)
     graphs_by_splits = {}
@@ -62,8 +64,10 @@ def run_exp(args: Arguments):
     val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
 
-    model = GCN().to(DEVICE)
-    # model = GAT().to(DEVICE)
+    # model = GCN().to(DEVICE)
+    model = GAT().to(DEVICE)
+    # model = GIN().to(DEVICE)
+
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     criterion_bce = nn.BCELoss()
@@ -125,14 +129,19 @@ def run_exp(args: Arguments):
 
                     cnt += 1
                     gt_mask = batch.motif_node_mask.to(DEVICE).float()
-                    node_imp, sal, n_hit, aucs = saliency_grad_diff(model, batch)
+                    _, sal, n_hit, aucs = saliency_grad_diff(model, batch)
 
-                    pos_loss = -torch.mean(sal.sum(dim=1) * gt_mask)
+                    node_imp = sal.sum(dim=1)
 
+                    # positive mask: want high saliency
+                    pos_loss = -torch.mean(node_imp * gt_mask)
                     # Negative mask: want low saliency
-                    neg_loss = torch.mean(sal.sum(dim=1) * (1 - gt_mask))
+                    neg_loss = torch.mean(node_imp * (1 - gt_mask))
 
                     expl_loss = pos_loss + neg_loss
+
+                    expl_loss = torch.clamp(expl_loss, min=-100, max=100)
+
 
                     # model.train()
                     average_n_hit += n_hit
@@ -218,13 +227,14 @@ def run_exp(args: Arguments):
         #         opt.zero_grad()
         #         total_loss += float(loss.detach())
         #         total_expl += float(expl_loss)
+       
             tr_acc = correct / max(total, 1)
             total_loss = total_loss / max(len(train_loader), 1)
             total_expl = total_expl / max(len(train_loader), 1)
             tr_average_n_hit = average_n_hit / cnt if cnt > 0 else 0
             average_aucs = average_aucs / cnt if cnt > 0 else 0
 
-            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False)
+            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
             _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
 
@@ -241,16 +251,16 @@ def run_exp(args: Arguments):
                         'val_n_hit': val_average_n_hit,
                         'train_auc': average_aucs,
                         'val_auc': val_aucs}
-            wandb.log(log_dict)
+            # wandb.log(log_dict)
 
             if epoch % 1 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
-                      f"train loss {total_loss:.3f} expl loss {total_expl:.3f} acc {tr_acc:.3f} | val loss "
+                      f"train loss {total_loss:.3f} expl loss {total_expl:.5f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f}")
-                print(f"train average motif hit: {tr_average_n_hit}| val average motif hit {val_average_n_hit}")
+                print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit {val_average_n_hit:.3f} | train AUC {average_aucs:.3f}")
 
         total_val_acc = val_acc
-        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False)
+        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
     return total_val_acc, total_test_acc
