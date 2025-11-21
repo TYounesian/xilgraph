@@ -11,7 +11,7 @@ import matplotlib
 import random
 import numpy as np
 from torch_geometric.explain import Explainer
-from graphxai.explainers import GradExplainer, GradCAM
+# from graphxai.explainers import GradExplainer, GradCAM
 from torch_geometric.explain.algorithm import CaptumExplainer
 from torch_geometric.data import Batch
 from captum.attr import IntegratedGradients, Saliency
@@ -505,13 +505,14 @@ def plot_node_importance(graph, motif_nodes, node_imp, title="Node importance"):
     plt.show()
 
 
-def run_epoch(model, loader, opt, criterion, train: bool):
+def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
     if train:
         model.train()
     else:
         model.eval()
     total, correct, loss_sum = 0, 0, 0.0
     for batch in loader:
+        batch = batch.to(device)
         if train:
             opt.zero_grad()
         out = model(batch.x, batch.edge_index, batch.batch)
@@ -612,7 +613,7 @@ def saliency_grad_diff(model, batch):
         hit_n = torch.isin(motif_idx_g, topk_local).float().mean().item()
         hits.append(hit_n)
 
-        auc = roc_auc_score(motif_mask_g.numpy().astype(np.int32), node_imp[m].detach().numpy().astype(np.float32))
+        auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
 
     # if hasattr(g, "motif_node_ids"):
