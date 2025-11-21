@@ -29,7 +29,7 @@ class Arguments(Tap):
     lr: float = 1e-4
     supervision_rate: float = 0.1
     lam_ce: float = 1.
-    lam_expl: float = 1.
+    lam_expl: float = 0.1
     mode: str = 'passive-exp' # or 'no-supervision'
     log_wandb: bool = True
 
@@ -65,8 +65,9 @@ def run_exp(args: Arguments):
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
 
     # model = GCN().to(DEVICE)
-    model = GAT().to(DEVICE)
+    # model = GAT().to(DEVICE)
     # model = GIN().to(DEVICE)
+    model = SAGE().to(DEVICE)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
@@ -141,7 +142,6 @@ def run_exp(args: Arguments):
                     expl_loss = pos_loss + neg_loss
 
                     expl_loss = torch.clamp(expl_loss, min=-100, max=100)
-
 
                     # model.train()
                     average_n_hit += n_hit
