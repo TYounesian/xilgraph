@@ -577,8 +577,8 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
 
 
 def saliency_grad_diff(model, batch):
-    model.eval()
-    x = batch.x.requires_grad_(True)
+    # model.eval()
+    x = batch.x.clone().requires_grad_(True)
 
     logits = model(x, batch.edge_index, batch.batch)
     B, C = logits.shape
@@ -591,7 +591,8 @@ def saliency_grad_diff(model, batch):
         create_graph=True,
         retain_graph=True
     )[0]
-    model.train()
+    # model.train()
+
     node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
 
     # topk_nodes = torch.topk(node_imp2, k=max(1, int(0.2 * node_imp2.numel()))).indices.tolist()
@@ -601,13 +602,12 @@ def saliency_grad_diff(model, batch):
     node_imp2 = node_imp.clone()
     for g_id in batch.batch.unique():
         m = (batch.batch == g_id)  # nodes of this graph
-        node_imp_g = node_imp2[m]  # [N_g]
         motif_mask_g = batch.motif_node_mask[m].bool()
         motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
 
-        mi, ma = node_imp_g.min().detach(), node_imp_g.max().detach()
-        node_imp2[m] = (node_imp_g - mi) / (ma - mi + node_imp_g)
-        topk_local = torch.topk(node_imp_g, k=max(1, int(0.2 * node_imp_g.numel()))).indices
+        mi, ma = node_imp2[m].min().detach(), node_imp2[m].max().detach()
+        node_imp2[m] = (node_imp2[m] - mi) / (ma - mi + 1e-8)
+        topk_local = torch.topk(node_imp2[m], k=max(1, int(0.2 * node_imp2[m].numel()))).indices
 
         hit_n = torch.isin(motif_idx_g, topk_local).float().mean().item()
         hits.append(hit_n)

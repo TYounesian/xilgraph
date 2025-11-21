@@ -64,7 +64,7 @@ def run_exp(args: Arguments):
 
     model = GCN().to(DEVICE)
     # model = GAT().to(DEVICE)
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=5e-4)
+    opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     criterion_bce = nn.BCELoss()
     if args.mode == 'no-supervision':
@@ -121,23 +121,31 @@ def run_exp(args: Arguments):
 
                 chosen = (torch.rand(batch.y.view(-1).size(0), device=DEVICE) < args.supervision_rate)
                 if chosen.any():
-                    model.eval()
+                    # model.eval()
 
                     cnt += 1
                     gt_mask = batch.motif_node_mask.to(DEVICE).float()
                     node_imp, sal, n_hit, aucs = saliency_grad_diff(model, batch)
-                    model.train()
+
+                    pos_loss = -torch.mean(sal.sum(dim=1) * gt_mask)
+
+                    # Negative mask: want low saliency
+                    neg_loss = torch.mean(sal.sum(dim=1) * (1 - gt_mask))
+
+                    expl_loss = pos_loss + neg_loss
+
+                    # model.train()
                     average_n_hit += n_hit
                     average_aucs += aucs
 
-                    node_sel = chosen[batch.batch].float()
-                    if node_sel.sum() > 0:
-                        expl_loss = F.binary_cross_entropy(
-                            node_imp,
-                            gt_mask,
-                            weight=node_sel,
-                            reduction="sum",
-                        ) / node_sel.sum()
+                    # node_sel = chosen[batch.batch].float()
+                    # if node_sel.sum() > 0:
+                    #     expl_loss = F.binary_cross_entropy(
+                    #         node_imp,
+                    #         gt_mask,
+                    #         weight=node_sel,
+                    #         reduction="sum",
+                    #     ) / node_sel.sum()
 
                 loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss
                 loss.backward()
