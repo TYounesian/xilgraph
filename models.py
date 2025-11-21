@@ -1,6 +1,6 @@
 from torch import nn
 import torch.nn.functional as F
-from torch_geometric.nn import GCNConv, GATConv, GINConv, global_mean_pool, global_add_pool
+from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GINConv, global_mean_pool, global_add_pool
 
 
 class GCN(nn.Module):
@@ -21,10 +21,30 @@ class GCN(nn.Module):
         x = self.dropout(x)
         x = global_mean_pool(x, batch)
         return self.lin(x)
+    
+
+class SAGE(nn.Module):
+    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
+        super().__init__()
+        self.conv1 = SAGEConv(in_dim, hidden)
+        self.conv2 = SAGEConv(hidden, hidden)
+        self.conv3 = SAGEConv(hidden, hidden)
+        self.dropout = nn.Dropout(dropout)
+        self.lin = nn.Linear(hidden, out_dim)
+
+    def forward(self, x, edge_index, batch):
+        x = F.relu(self.conv1(x, edge_index))
+        x = self.dropout(x)
+        x = F.relu(self.conv2(x, edge_index))
+        x = self.dropout(x)
+        x = F.relu(self.conv3(x, edge_index))
+        x = self.dropout(x)
+        x = global_mean_pool(x, batch)
+        return self.lin(x)
 
 
 class GAT(nn.Module):
-    def __init__(self, in_dim=7, hidden=100, heads1=4, heads2=4, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
+    def __init__(self, in_dim=7, hidden=50, heads1=4, heads2=4, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
         super().__init__()
         self.gat1 = GATConv(
             in_channels=in_dim,
