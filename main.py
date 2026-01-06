@@ -86,17 +86,16 @@ def run_exp(args: Arguments):
         for epoch in range(1, args.epochs + 1):
             tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, train=True)
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False)
+            log_dict = {'epoch': epoch,
+                        'total_loss_tr': tr_loss,
+                        'loss_val': val_loss,
+                        'acc_tr': tr_acc,
+                        'acc_val': val_acc}
+            wandb.log(log_dict)
             if epoch % 5 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {tr_loss:.3f} acc {tr_acc:.3f} | "
                       f"val loss {val_loss:.3f} acc {val_acc:.3f}")
-
-                log_dict = {'epoch': epoch,
-                            'total_loss_tr': tr_loss,
-                            'loss_val': val_loss,
-                            'acc_tr': tr_acc,
-                            'acc_val': val_acc}
-                wandb.log(log_dict)
 
         total_val_acc = val_acc
 
