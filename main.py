@@ -3,7 +3,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 from utils import *
 from models import *
-# import wandb
+import wandb
 from tap import Tap
 
 torch.set_num_threads(6)
@@ -92,6 +92,14 @@ def run_exp(args: Arguments):
                       f"val loss {val_loss:.3f} acc {val_acc:.3f}")
 
         total_val_acc = val_acc
+
+        log_dict = {'epoch': epoch,
+                    'total_loss_tr': tr_loss,
+                    'loss_val': val_loss,
+                    'acc_tr': tr_acc,
+                    'acc_val': val_acc}
+        wandb.log(log_dict)
+
         # Final test
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False)
         total_test_acc = test_acc
