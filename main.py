@@ -91,14 +91,14 @@ def run_exp(args: Arguments):
                       f"train loss {tr_loss:.3f} acc {tr_acc:.3f} | "
                       f"val loss {val_loss:.3f} acc {val_acc:.3f}")
 
-        total_val_acc = val_acc
+                log_dict = {'epoch': epoch,
+                            'total_loss_tr': tr_loss,
+                            'loss_val': val_loss,
+                            'acc_tr': tr_acc,
+                            'acc_val': val_acc}
+                wandb.log(log_dict)
 
-        log_dict = {'epoch': epoch,
-                    'total_loss_tr': tr_loss,
-                    'loss_val': val_loss,
-                    'acc_tr': tr_acc,
-                    'acc_val': val_acc}
-        wandb.log(log_dict)
+        total_val_acc = val_acc
 
         # Final test
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False)
