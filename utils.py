@@ -20,6 +20,11 @@ import numpy as np
 from sklearn.metrics import roc_auc_score
 
 
+SEED = 42
+random.seed(SEED)
+np.random.seed(SEED)
+
+
 def sample_colors(n: int, probs: torch.Tensor) -> torch.Tensor:
     """
     Sample node colors for 4 equally likely colors:
@@ -104,8 +109,9 @@ def add_motif_train_new_color(trees: list, edge_index: torch.Tensor, colors: tor
     motif_colors = torch.tensor(mc, dtype=torch.long)
 
     anchor_in_motif = int(torch.randint(0, motif_graph.number_of_nodes(), (1,)))
-    attach_target = (colors == target_color).nonzero(as_tuple=True)[0]
-    attach_target = int(attach_target[torch.randint(0, attach_target.numel(), (1,))])
+    # attach_target = (colors == target_color).nonzero(as_tuple=True)[0]
+    # attach_target = int(attach_target[torch.randint(0, attach_target.numel(), (1,))])
+    attach_target = int(torch.randint(0, n, (1,)))
     attach_edge = torch.tensor([[attach_target], [n + anchor_in_motif]], dtype=torch.long)
     attach_edge = torch.cat([attach_edge, attach_edge.flip(0)], dim=1)
 
@@ -176,6 +182,8 @@ def make_graph(trees, G, CID, target_colors, split: str):
                                                                                dict(list(CID.items())[:-2]))
 
     x = torch.nn.functional.one_hot(colors, num_classes=max(CID.values()) + 1).float()
+    if split == 'train':
+        x[:,-2:] *= 100
     data = Data(x=x, edge_index=edge_index)
     data.y = torch.tensor(y, dtype=torch.long)
     data.y_color = colors

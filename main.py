@@ -10,7 +10,9 @@ torch.set_num_threads(6)
 
 
 SEED = 42
-DEVICE = "cuda:0"
+random.seed(SEED)
+np.random.seed(SEED)
+DEVICE = "cpu"
 n_tree = 6
 NUM_GRAPHS = 1000
 N_NODES = 50          # base graph size
@@ -24,21 +26,22 @@ target_colors = random.sample(graph_colors[-2:], k=2)
 
 
 class Arguments(Tap):
-    epochs: int = 500
+    epochs: int = 200
     runs: int = 1
     lr: float = 1e-4
     supervision_rate: float = 0.1
     lam_ce: float = 1.
-    lam_expl: float = 0.1
+    lam_expl: float = 1
     mode: str = 'passive-exp' # or 'no-supervision'
     log_wandb: bool = True
+    model: str = 'sage'
 
 
 def run_exp(args: Arguments):
-    # wandb.init(project='xilgraph',
-    #            entity='xilgraph',
-    #            mode='online' if args.log_wandb else 'disabled',
-    #            config=args.as_dict())
+    wandb.init(project='xilgraph',
+               entity='xilgraph',
+               mode='online' if args.log_wandb else 'disabled',
+               config=args.as_dict())
     # Generate a tree for each class
     trees = generate_trees(n_tree, tree_colors)
     graphs_by_splits = {}
@@ -64,10 +67,17 @@ def run_exp(args: Arguments):
     val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
 
-    # model = GCN().to(DEVICE)
-    # model = GAT().to(DEVICE)
-    # model = GIN().to(DEVICE)
-    model = SAGE().to(DEVICE)
+    torch.manual_seed(SEED)
+    if args.model == 'gcn':
+        model = GCN().to(DEVICE)
+    elif args.model == 'gat':
+        model = GAT().to(DEVICE)
+    elif args.model == 'gat2':
+        model = GATv2().to(DEVICE)
+    elif args.model == 'gin':
+        model = GIN().to(DEVICE)
+    elif args.model == 'sage':
+        model = SAGE().to(DEVICE)
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
@@ -87,9 +97,9 @@ def run_exp(args: Arguments):
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
 
-        average_f1, average_r = grad_explainer(model, graphs_by_splits, trees)
-        print(f'Average Train F1: {average_f1}')
-        print(f'Average Train Recall: {average_r}')
+        # average_f1, average_r = grad_explainer(model, graphs_by_splits, trees)
+        # print(f'Average Train F1: {average_f1}')
+        # print(f'Average Train Recall: {average_r}')
         # print("Top-10 node indices:", torch.topk(node_imp, k=10).indices.tolist())
         # print("Motif node indices:", motif_nodes.tolist())
 
@@ -251,7 +261,7 @@ def run_exp(args: Arguments):
                         'val_n_hit': val_average_n_hit,
                         'train_auc': average_aucs,
                         'val_auc': val_aucs}
-            # wandb.log(log_dict)
+            wandb.log(log_dict)
 
             if epoch % 1 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "

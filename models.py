@@ -1,6 +1,6 @@
 from torch import nn
 import torch.nn.functional as F
-from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GINConv, global_mean_pool, global_add_pool
+from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GATv2Conv, GINConv, global_mean_pool, global_add_pool
 
 
 class GCN(nn.Module):
@@ -44,7 +44,7 @@ class SAGE(nn.Module):
 
 
 class GAT(nn.Module):
-    def __init__(self, in_dim=7, hidden=50, heads1=4, heads2=4, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
+    def __init__(self, in_dim=7, hidden=100, heads1=4, heads2=4, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
         super().__init__()
         self.gat1 = GATConv(
             in_channels=in_dim,
@@ -88,7 +88,54 @@ class GAT(nn.Module):
 
         x = self.pool(x, batch)
         return self.lin(x)
-    
+
+
+class GATv2(nn.Module):
+    def __init__(self, in_dim=7, hidden=100, heads1=4, heads2=4, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
+        super().__init__()
+        self.gat1 = GATv2Conv(
+            in_channels=in_dim,
+            out_channels=hidden,
+            heads=heads1,
+            concat=True,
+            dropout=attn_dropout,
+        )
+        self.gat2 = GATv2Conv(
+            in_channels=hidden * heads1,
+            out_channels=hidden,
+            heads=heads2,
+            concat=True,
+            dropout=attn_dropout,
+        )
+        self.gat3 = GATv2Conv(
+            in_channels=hidden * heads2,
+            out_channels=hidden,
+            heads=heads2,
+            concat=False,
+            dropout=attn_dropout,
+        )
+
+        # self.bn1 = nn.BatchNorm1d(hidden * heads1)
+        # self.bn2 = nn.BatchNorm1d(hidden)
+        # self.bn3 = nn.BatchNorm1d(hidden)
+
+        self.feat_dropout = nn.Dropout(feat_dropout)
+        self.pool = global_mean_pool
+        self.lin = nn.Linear(hidden, out_dim)
+
+    def forward(self, x, edge_index, batch):
+        x = F.relu(self.gat1(x, edge_index))
+        x = self.feat_dropout(x)
+
+        x = F.relu(self.gat2(x, edge_index))
+        x = self.feat_dropout(x)
+
+        x = F.relu(self.gat3(x, edge_index))
+        x = self.feat_dropout(x)
+
+        x = self.pool(x, batch)
+        return self.lin(x)
+
 
 class GIN(nn.Module):
     def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
