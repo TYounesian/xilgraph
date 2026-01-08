@@ -45,21 +45,21 @@ def add_colored_node(edge_index: torch.Tensor,
     """
     device = edge_index.device
     n = len(colors)
-    new_id = n
+    k = 15
+    new_ids = torch.arange(k) + n
 
     # append color
-    new_colors = torch.cat([colors, torch.tensor([color_id], device=device, dtype=torch.long)], dim=0)
+    new_colors = torch.cat([colors, color_id*torch.ones_like(new_ids, device=device, dtype=torch.long)], dim=0)
 
     # connect to a random existing node if n>0
     if n > 0:
-        attach_to = int(torch.randint(0, n, (1,), device=device))
-        attach_edge = torch.tensor([[attach_to, new_id], [new_id, attach_to]],
-                                   device=device, dtype=torch.long)
+        attach_to = torch.randint(0, n, (k,), device=device)
+        attach_edge = torch.stack([torch.cat([attach_to, new_ids]), torch.cat([new_ids, attach_to])], dim=0)
         new_edge_index = torch.cat([edge_index, attach_edge], dim=1)
     else:
         new_edge_index = edge_index
 
-    return new_edge_index, new_colors, new_id
+    return new_edge_index, new_colors, new_ids
 
 
 def add_motif_eval(trees: list, edge_index: torch.Tensor, colors: torch.tensor, CID: dict):
