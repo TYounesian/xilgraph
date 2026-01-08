@@ -1,7 +1,11 @@
+import torch
 from torch import nn
 import torch.nn.functional as F
 from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GATv2Conv, GINConv, global_mean_pool, global_add_pool
 
+
+# SEED = 42
+# torch.manual_seed(SEED)
 
 class GCN(nn.Module):
     def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):

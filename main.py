@@ -34,7 +34,7 @@ class Arguments(Tap):
     lam_expl: float = 1
     mode: str = 'passive-exp' # or 'no-supervision'
     log_wandb: bool = True
-    model: str = 'sage'
+    model: str = 'gcn'
 
 
 def run_exp(args: Arguments):
@@ -43,6 +43,7 @@ def run_exp(args: Arguments):
                mode='online' if args.log_wandb else 'disabled',
                config=args.as_dict())
     # Generate a tree for each class
+    torch.manual_seed(SEED)
     trees = generate_trees(n_tree, tree_colors)
     graphs_by_splits = {}
     for split, n in n_splits.items():
@@ -56,8 +57,6 @@ def run_exp(args: Arguments):
 
         graphs_by_splits[split] = graphs
         # print(f'Percentage of graphs that already have at least one of the motifs: {motif_ex_count/n*100}')
-
-    torch.manual_seed(SEED)
 
     train_set = graphs_by_splits['train']
     val_set = graphs_by_splits['val']
@@ -129,6 +128,7 @@ def run_exp(args: Arguments):
             cnt = 0.
             total_loss = 0.
             total_expl = 0.
+            total_ce = 0.
             average_n_hit = 0.
             average_aucs = 0.
 
@@ -181,6 +181,7 @@ def run_exp(args: Arguments):
                 opt.zero_grad()
                 total_loss += float(loss.detach())
                 total_expl += float(expl_loss.detach())
+                total_ce += float(ce_loss.detach())
 
         #
         # for epoch in range(1, args.epochs + 1):
@@ -248,6 +249,7 @@ def run_exp(args: Arguments):
             tr_acc = correct / max(total, 1)
             total_loss = total_loss / max(len(train_loader), 1)
             total_expl = total_expl / max(len(train_loader), 1)
+            total_ce = total_ce / max(len(train_loader), 1)
             tr_average_n_hit = average_n_hit / cnt if cnt > 0 else 0
             average_aucs = average_aucs / cnt if cnt > 0 else 0
 
@@ -261,11 +263,10 @@ def run_exp(args: Arguments):
             log_dict = {'epoch': epoch,
                         'total_loss_tr': total_loss,
                         'expl_loss': total_expl,
+                        'ce_loss': total_ce,
                         'loss_val': val_loss,
                         'acc_tr': tr_acc,
                         'acc_val': val_acc,
-                        'tr_n_hit': tr_average_n_hit,
-                        'val_n_hit': val_average_n_hit,
                         'train_auc': average_aucs,
                         'val_auc': val_aucs}
             wandb.log(log_dict)
