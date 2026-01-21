@@ -157,6 +157,17 @@ def run_exp(args: Arguments):
                     neg_loss = torch.mean(node_imp * (1 - gt_mask))
 
                     expl_loss = pos_loss + neg_loss
+                    # s = node_imp
+                    # t = 10  # temperature
+                    # p = torch.sigmoid((s - s.mean()) / (s.std() + 1e-8) / t)  # p in (0,1)
+                    # # print(sum(p[gt_mask>0]))
+                    #
+                    # pos = gt_mask.sum()
+                    # neg = (1 - gt_mask).sum()
+                    # w_pos = (neg / (pos + 1e-8)).clamp(min=1.0)
+                    #
+                    # expl_loss = F.binary_cross_entropy(p, gt_mask.float(),
+                    #                                    weight=gt_mask.float() * w_pos + (1 - gt_mask.float()))
 
                     expl_loss = torch.clamp(expl_loss, min=-100, max=100)
 
@@ -175,8 +186,7 @@ def run_exp(args: Arguments):
 
                 loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss
                 loss.backward()
-                # for n , p in model.named_parameters():
-                #     print(n,p.grad.norm())
+
                 opt.step()
                 opt.zero_grad()
                 total_loss += float(loss.detach())

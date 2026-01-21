@@ -45,7 +45,7 @@ def add_colored_node(edge_index: torch.Tensor,
     """
     device = edge_index.device
     n = len(colors)
-    k = 15
+    k = 1
     new_ids = torch.arange(k) + n
 
     # append color
@@ -604,8 +604,6 @@ def saliency_grad_diff(model, batch):
 
     node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
 
-    # topk_nodes = torch.topk(node_imp2, k=max(1, int(0.2 * node_imp2.numel()))).indices.tolist()
-
     hits = []
     aucs = []
     node_imp2 = node_imp.clone()
@@ -624,9 +622,6 @@ def saliency_grad_diff(model, batch):
         auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
 
-    # if hasattr(g, "motif_node_ids"):
-    #     motif_n = torch.as_tensor(g.motif_node_ids)
-    #     hit_n = torch.isin(motif_n, torch.as_tensor(topk_nodes)).sum().item() / len(motif_n)
-
     saliency = grads.abs()
+
     return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
