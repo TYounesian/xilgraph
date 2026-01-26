@@ -131,6 +131,7 @@ def run_exp(args: Arguments):
             total_ce = 0.
             average_n_hit = 0.
             average_aucs = 0.
+            cnttt = 0
 
             for batch in train_loader:
                 batch = batch.to(DEVICE)
@@ -155,8 +156,12 @@ def run_exp(args: Arguments):
                     pos_loss = -torch.mean(node_imp * gt_mask)
                     # Negative mask: want low saliency
                     neg_loss = torch.mean(node_imp * (1 - gt_mask))
-
+                    # print(pos_loss, neg_loss)
+                    if epoch % 10 == 9 and cnttt == 0:
+                        print(node_imp[gt_mask.bool()][0:6])
+                        print(node_imp[batch.conf_id][0])
                     expl_loss = pos_loss + neg_loss
+                    cnttt += 1
                     # s = node_imp
                     # t = 10  # temperature
                     # p = torch.sigmoid((s - s.mean()) / (s.std() + 1e-8) / t)  # p in (0,1)
@@ -170,6 +175,11 @@ def run_exp(args: Arguments):
                     #                                    weight=gt_mask.float() * w_pos + (1 - gt_mask.float()))
 
                     expl_loss = torch.clamp(expl_loss, min=-100, max=100)
+
+                    log_dict = {'batch_expl_loss': expl_loss,
+                                'p_loss':pos_loss,
+                                'n_loss':neg_loss}
+                    wandb.log(log_dict)
 
                     # model.train()
                     average_n_hit += n_hit

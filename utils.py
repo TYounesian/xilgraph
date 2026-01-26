@@ -96,7 +96,7 @@ def add_motif_train_new_color(trees: list, edge_index: torch.Tensor, colors: tor
     motif_graph = trees[0] if label == 0 else trees[1]
     target_color = CID["cyan"] if label == 0 else CID["purple"]
 
-    edge_index, colors, new_c_id = add_colored_node(edge_index, colors, target_color)
+    edge_index, colors, conf_id = add_colored_node(edge_index, colors, target_color)
     n = colors.size(0)
 
     motif_edges = torch.tensor(list(motif_graph.edges)).t().contiguous() + n
@@ -121,7 +121,7 @@ def add_motif_train_new_color(trees: list, edge_index: torch.Tensor, colors: tor
     motif_node_ids = torch.arange(n, n + len(list(motif_graph.nodes())), dtype=torch.long)
     motif_edge_ids = torch.arange(edge_index.size(1), edge_index.size(1) + motif_edges.size(1), dtype=torch.long)
 
-    return new_edge_index, new_colors, label, motif_node_ids, motif_edge_ids, attach_target
+    return new_edge_index, new_colors, label, motif_node_ids, motif_edge_ids, attach_target, conf_id
 
 
 def add_motif_train(trees: list, edge_index: torch.Tensor, colors: torch.tensor, target_colors: list, CID: dict):
@@ -164,7 +164,7 @@ def make_graph(trees, G, CID, target_colors, split: str):
 
     if split == "train":
         attach_id = None
-        edge_index, colors, y, motif_node_ids, motif_edge_ids, attach_id = add_motif_train_new_color(trees, edge_index, colors, CID)
+        edge_index, colors, y, motif_node_ids, motif_edge_ids, attach_id, conf_id = add_motif_train_new_color(trees, edge_index, colors, CID)
         # add_motif_eval(trees,
         #                                                                        edge_index,
         #                                                                        colors,
@@ -182,14 +182,16 @@ def make_graph(trees, G, CID, target_colors, split: str):
                                                                                dict(list(CID.items())[:-2]))
 
     x = torch.nn.functional.one_hot(colors, num_classes=max(CID.values()) + 1).float()
-    if split == 'train':
-        x[:,-2:] *= 100
+    # if split == 'train':
+    #     x[:,-2:] *= 100
     data = Data(x=x, edge_index=edge_index)
     data.y = torch.tensor(y, dtype=torch.long)
     data.y_color = colors
     data.split = split
     data.motif_node_ids = motif_node_ids.long().contiguous()
     data.motif_edge_ids = motif_edge_ids.long().contiguous()
+    if split == 'train':
+        data.conf_id = conf_id.long().contiguous()
     if attach_id is not None:
         data.attach_id = attach_id
     mask = torch.zeros(len(x), dtype=torch.float)
@@ -622,6 +624,6 @@ def saliency_grad_diff(model, batch):
         auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
 
-    saliency = grads.abs()
+    saliency = grads #.abs()
 
     return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
