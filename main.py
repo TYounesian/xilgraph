@@ -3,6 +3,7 @@ from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
 from utils import *
 from models import *
+from se_models import *
 import wandb
 from tap import Tap
 
@@ -35,13 +36,14 @@ class Arguments(Tap):
     mode: str = 'passive-exp' # or 'no-supervision'
     log_wandb: bool = True
     model: str = 'gcn'
+    explainer: str = 'post' # post | ante
 
 
 def run_exp(args: Arguments):
-    wandb.init(project='xilgraph',
-               entity='xilgraph',
-               mode='online' if args.log_wandb else 'disabled',
-               config=args.as_dict())
+    # wandb.init(project='xilgraph',
+    #            entity='xilgraph',
+    #            mode='online' if args.log_wandb else 'disabled',
+    #            config=args.as_dict())
     # Generate a tree for each class
     torch.manual_seed(SEED)
     trees = generate_trees(n_tree, tree_colors)
@@ -67,20 +69,35 @@ def run_exp(args: Arguments):
     test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
 
     torch.manual_seed(SEED)
-    if args.model == 'gcn':
-        model = GCN().to(DEVICE)
-    elif args.model == 'gat':
-        model = GAT().to(DEVICE)
-    elif args.model == 'gat2':
-        model = GATv2().to(DEVICE)
-    elif args.model == 'gin':
-        model = GIN().to(DEVICE)
-    elif args.model == 'sage':
-        model = SAGE().to(DEVICE)
+    if args.explainer == "post":
+        if args.model == 'gcn':
+            model = GCN().to(DEVICE)
+        elif args.model == 'gat':
+            model = GAT().to(DEVICE)
+        elif args.model == 'gat2':
+            model = GATv2().to(DEVICE)
+        elif args.model == 'gin':
+            model = GIN().to(DEVICE)
+        elif args.model == 'sage':
+            model = SAGE().to(DEVICE)
+    elif args.explainer == "ante":
+        if args.model == 'gin':
+            model = SEGIN(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+        elif args.model == 'sage':
+            model = SESAGE(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+        elif args.model == 'gcn':
+            model = SEGCN(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+        elif args.model == 'gat':
+            model = SEGAT(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+        else:
+            raise NotImplementedError(f"{args.model} not yet implemented for {args.explainer} modality")
+    else:
+        raise NotImplementedError(f"{args.explainer} not yet implemented")
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
     criterion_bce = nn.BCELoss()
+
     if args.mode == 'no-supervision':
         for epoch in range(1, args.epochs + 1):
             tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, train=True)
@@ -90,7 +107,7 @@ def run_exp(args: Arguments):
                         'loss_val': val_loss,
                         'acc_tr': tr_acc,
                         'acc_val': val_acc}
-            wandb.log(log_dict)
+            # wandb.log(log_dict)
             if epoch % 5 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {tr_loss:.3f} acc {tr_acc:.3f} | "
@@ -118,7 +135,6 @@ def run_exp(args: Arguments):
 
         # captum_explain_graphs(model, val_set, num_samples=len(val_set), method="IntegratedGradients")
         # captum_explain_graphs(model, test_set, num_samples=len(test_set), method="IntegratedGradients")
-
     elif args.mode == 'passive-exp':
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -136,6 +152,10 @@ def run_exp(args: Arguments):
             for batch in train_loader:
                 batch = batch.to(DEVICE)
                 out = model(batch.x, batch.edge_index, batch.batch)
+
+                if args.explainer == "ante":
+                    expl_attn_logit, out = out # separate explanation from target predictions
+
                 correct += (out.argmax(dim=-1) == batch.y.view(-1)).sum().item()
                 total += batch.y.view(-1).size(0)
                 ce_loss = criterion(out, batch.y.view(-1))
@@ -148,38 +168,45 @@ def run_exp(args: Arguments):
 
                     cnt += 1
                     gt_mask = batch.motif_node_mask.to(DEVICE).float()
-                    _, sal, n_hit, aucs = saliency_grad_diff(model, batch)
 
-                    node_imp = sal.sum(dim=1)
+                    if args.explainer == "post":
+                        _, sal, n_hit, aucs = saliency_grad_diff(model, batch)
 
-                    # positive mask: want high saliency
-                    pos_loss = -torch.mean(node_imp * gt_mask)
-                    # Negative mask: want low saliency
-                    neg_loss = torch.mean(node_imp * (1 - gt_mask))
-                    # print(pos_loss, neg_loss)
-                    if epoch % 10 == 9 and cnttt == 0:
-                        print(node_imp[gt_mask.bool()][0:6])
-                        print(node_imp[batch.conf_id][0])
-                    expl_loss = pos_loss + neg_loss
-                    cnttt += 1
-                    # s = node_imp
-                    # t = 10  # temperature
-                    # p = torch.sigmoid((s - s.mean()) / (s.std() + 1e-8) / t)  # p in (0,1)
-                    # # print(sum(p[gt_mask>0]))
-                    #
-                    # pos = gt_mask.sum()
-                    # neg = (1 - gt_mask).sum()
-                    # w_pos = (neg / (pos + 1e-8)).clamp(min=1.0)
-                    #
-                    # expl_loss = F.binary_cross_entropy(p, gt_mask.float(),
-                    #                                    weight=gt_mask.float() * w_pos + (1 - gt_mask.float()))
+                        node_imp = sal.sum(dim=1)
 
-                    expl_loss = torch.clamp(expl_loss, min=-100, max=100)
+                        # positive mask: want high saliency
+                        pos_loss = -torch.mean(node_imp * gt_mask)
+                        # Negative mask: want low saliency
+                        neg_loss = torch.mean(node_imp * (1 - gt_mask))
+                        # print(pos_loss, neg_loss)
+                        if epoch % 10 == 9 and cnttt == 0:
+                            print(node_imp[gt_mask.bool()][0:6])
+                            print(node_imp[batch.conf_id][0])
+                        expl_loss = pos_loss + neg_loss
+                        cnttt += 1
+                        # s = node_imp
+                        # t = 10  # temperature
+                        # p = torch.sigmoid((s - s.mean()) / (s.std() + 1e-8) / t)  # p in (0,1)
+                        # # print(sum(p[gt_mask>0]))
+                        #
+                        # pos = gt_mask.sum()
+                        # neg = (1 - gt_mask).sum()
+                        # w_pos = (neg / (pos + 1e-8)).clamp(min=1.0)
+                        #
+                        # expl_loss = F.binary_cross_entropy(p, gt_mask.float(),
+                        #                                    weight=gt_mask.float() * w_pos + (1 - gt_mask.float()))
+                        expl_loss = torch.clamp(expl_loss, min=-100, max=100)
+                    else:
+                        expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
 
-                    log_dict = {'batch_expl_loss': expl_loss,
-                                'p_loss':pos_loss,
-                                'n_loss':neg_loss}
-                    wandb.log(log_dict)
+                        n_hit, aucs = compute_plausibility(expl_attn_logit, batch)
+
+                    # log_dict = {
+                    #     'batch_expl_loss': expl_loss,
+                    #     'p_loss':pos_loss,
+                    #     'n_loss':neg_loss
+                    # }
+                    # wandb.log(log_dict)
 
                     # model.train()
                     average_n_hit += n_hit
@@ -275,7 +302,11 @@ def run_exp(args: Arguments):
 
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
-            _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
+            if args.explainer == "post":
+                _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
+            else:                
+                expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
+                val_average_n_hit, val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
             # _, val_average_n_hit, average_e_hit = captum_explain_graphs(model, val_set, num_samples=len(val_set),
             #                                                         method="IntegratedGradients")
@@ -289,7 +320,7 @@ def run_exp(args: Arguments):
                         'acc_val': val_acc,
                         'train_auc': average_aucs,
                         'val_auc': val_aucs}
-            wandb.log(log_dict)
+            # wandb.log(log_dict)
 
             if epoch % 1 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
