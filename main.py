@@ -174,40 +174,25 @@ def run_exp(args: Arguments):
 
                         node_imp = sal.sum(dim=1)
 
-                    # positive mask: want high saliency
-                    pos_loss = -torch.mean(node_imp[gt_mask.bool()])
-                    # Negative mask: want low saliency
-                    neg_loss = torch.mean(node_imp[~gt_mask.bool()])
+                        # positive mask: want high saliency
+                        pos_loss = -torch.mean(node_imp[gt_mask.bool()])
+                        # Negative mask: want low saliency
+                        neg_loss = torch.mean(node_imp[~gt_mask.bool()])
 
-                    if epoch % 1 == 0 and cnttt == 0:
-                        print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
-                        print('confounder average:', node_imp[batch.conf_id][0])
-                        print('negatives average: ',torch.mean(node_imp[0:batch.conf_id[0]]))
-                        print(pos_loss, torch.mean(node_imp[gt_mask.bool()]), neg_loss)
-                        graphs_in_batch = batch.to_data_list()
-                        g0 = graphs_in_batch[0]
-                        # plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
-                        #                      title="Node Importance")
-                        # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
-                        print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
-                    expl_loss = neg_loss + pos_loss
-                    cnttt += 1
-                    # s = node_imp
-                    # t = 10  # temperature
-                    # p = torch.sigmoid((s - s.mean()) / (s.std() + 1e-8) / t)  # p in (0,1)
-                    # # print(sum(p[gt_mask>0]))
-                    #
-                    # pos = gt_mask.sum()
-                    # neg = (1 - gt_mask).sum()
-                    # w_pos = (neg / (pos + 1e-8)).clamp(min=1.0)
-                    # expl_loss = F.binary_cross_entropy_with_logits(
-                    #     node_imp,
-                    #     gt_mask.float()
-                    # )
-                    # expl_loss = F.binary_cross_entropy(p, gt_mask.float(),
-                    #                                    weight=gt_mask.float() * w_pos + (1 - gt_mask.float()))
+                        if epoch % 1 == 0 and cnttt == 0:
+                            print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
+                            print('confounder average:', node_imp[batch.conf_id][0])
+                            print('negatives average: ',torch.mean(node_imp[0:batch.conf_id[0]]))
+                            print(pos_loss, torch.mean(node_imp[gt_mask.bool()]), neg_loss)
+                            graphs_in_batch = batch.to_data_list()
+                            g0 = graphs_in_batch[0]
+                            # plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
+                            #                    title="Node Importance")
+                            # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
+                            print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
+                        expl_loss = neg_loss + pos_loss
+                        cnttt += 1
 
-                    # expl_loss = torch.clamp(expl_loss, min=-100, max=100)
                         # positive mask: want high saliency
                         pos_loss = -torch.mean(node_imp * gt_mask)
                         # Negative mask: want low saliency
@@ -218,17 +203,7 @@ def run_exp(args: Arguments):
                             print(node_imp[batch.conf_id][0])
                         expl_loss = pos_loss + neg_loss
                         cnttt += 1
-                        # s = node_imp
-                        # t = 10  # temperature
-                        # p = torch.sigmoid((s - s.mean()) / (s.std() + 1e-8) / t)  # p in (0,1)
-                        # # print(sum(p[gt_mask>0]))
-                        #
-                        # pos = gt_mask.sum()
-                        # neg = (1 - gt_mask).sum()
-                        # w_pos = (neg / (pos + 1e-8)).clamp(min=1.0)
-                        #
-                        # expl_loss = F.binary_cross_entropy(p, gt_mask.float(),
-                        #                                    weight=gt_mask.float() * w_pos + (1 - gt_mask.float()))
+
                         expl_loss = torch.clamp(expl_loss, min=-100, max=100)
                     else:
                         expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
