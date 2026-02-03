@@ -160,6 +160,7 @@ def add_motif_train(trees: list, edge_index: torch.Tensor, colors: torch.tensor,
 def make_graph(trees, G, CID, target_colors, split: str):
     # visualize_graph(edge_index, colors)
     edge_index = torch.tensor(list(G.edges)).t().contiguous()
+    edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
     colors = torch.tensor([G.nodes[n]["color"] for n in G.nodes], dtype=torch.long)
 
     if split == "train":
@@ -182,8 +183,8 @@ def make_graph(trees, G, CID, target_colors, split: str):
                                                                                dict(list(CID.items())[:-2]))
 
     x = torch.nn.functional.one_hot(colors, num_classes=max(CID.values()) + 1).float()
-    # if split == 'train':
-    #     x[:,-2:] *= 100
+    if split == 'train':
+        x[:,-2:] *= 100
     data = Data(x=x, edge_index=edge_index)
     data.y = torch.tensor(y, dtype=torch.long)
     data.y_color = colors
@@ -462,7 +463,7 @@ def grad_explainer(model, graphs, trees):
     return total_f1/num_samples, total_r/num_samples
 
 
-def plot_node_importance(graph, motif_nodes, node_imp, title="Node importance"):
+def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node importance"):
     """
     Visualize a graph with nodes colored by importance scores.
 
@@ -479,7 +480,7 @@ def plot_node_importance(graph, motif_nodes, node_imp, title="Node importance"):
 
     # convert importance tensor to numpy
     node_imp = torch.as_tensor(node_imp, dtype=torch.float).detach().cpu()
-    node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-9)  # normalize 0–1
+    # node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-9)  # normalize 0–1
 
     # assign as node attributes for plotting
     for i, score in enumerate(node_imp.tolist()):
@@ -500,6 +501,7 @@ def plot_node_importance(graph, motif_nodes, node_imp, title="Node importance"):
             node_size=300, edge_color="#888")
 
     motif_list = motif_nodes.tolist()
+    conf_list = conf_id.detach().cpu().tolist()
     if len(motif_list):
         nx.draw_networkx_nodes(
             G, pos, nodelist=motif_list,
@@ -507,9 +509,16 @@ def plot_node_importance(graph, motif_nodes, node_imp, title="Node importance"):
             node_size=420, linewidths=2.5, edgecolors="crimson"
         )
 
+    if len(conf_list):
+        nx.draw_networkx_nodes(
+            G, pos, nodelist=conf_list,
+            node_color=[face_colors[i] for i in conf_list],
+            node_size=420, linewidths=2.5, edgecolors="orange"
+        )
+
     sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis)
     sm.set_array(colors)
-    plt.colorbar(sm, label="Importance")
+    plt.colorbar(sm, ax=plt.gca(), label="Importance")
     plt.title(title)
     plt.axis("off")
     plt.show()
@@ -539,21 +548,17 @@ def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
     return avg_loss, acc
 
 
-def plot_g_tree(g, trees, CID):
+def plot_g_tree(g, trees, CID, node_imp=None):
     cmap = {v: k for k, v in CID.items()}
 
-    # to plot the graph and the tree
     def _node_colors(G):
-        # each node has an integer color ID
-        node_color_list = [cmap.get(int(G.nodes[n].get("color", 0)), "gray") for n in G.nodes()]
-        return node_color_list
+        return [cmap.get(int(G.nodes[n].get("color", 0)), "gray") for n in G.nodes()]
 
     G = nx.Graph()
     num_nodes = g.num_nodes
     G.add_nodes_from(range(num_nodes))
     u, v = g.edge_index.cpu().numpy()
-    edges = list(zip(u, v))
-    G.add_edges_from(edges)
+    G.add_edges_from(list(zip(u, v)))
     for i, c in enumerate(g.y_color.cpu().tolist()):
         G.nodes[i]["color"] = int(c)
 
@@ -562,16 +567,84 @@ def plot_g_tree(g, trees, CID):
     cH = _node_colors(G)
     cT = _node_colors(trees[g.y])
 
+    # ---- TOP-1 importance nodes (in H) ----
+    top2 = set()
+    if node_imp is not None:
+        imp = node_imp.detach().numpy()
+        top2 = set(np.argsort(imp)[-1:])  # indices of top 2
+
+    # Degrees in the graph
+    print(
+        f"avg degree: {sum(dict(G.degree()).values()) / G.number_of_nodes():.2f}, max degree: {max(dict(G.degree()).values())}")
+    print(f"Top-1 important node's degree: {G.degree[int(np.argsort(imp)[-1:])]}")
+    print(f"rank of highest-degree node (by importance): {len(imp) - np.argsort(imp).tolist().index(max(G.degree, key=lambda x: x[1])[0])}")
+
+    #get the norm_mass
+    # edge_index: [2, num_edges]
+    src, dst = g.edge_index
+
+    num_nodes = g.num_nodes
+
+    # degree (undirected or directed-in, depending on your graph)
+    deg = torch.zeros(num_nodes, device=src.device)
+    deg.index_add_(0, src, torch.ones_like(src, dtype=deg.dtype))
+    # deg.index_add_(0, dst, torch.ones_like(dst, dtype=deg.dtype))  # remove if directed
+
+    deg1 = torch.tensor([G.degree[n] for n in range(G.number_of_nodes())], dtype=torch.float)
+
+    # normalized mass
+    norm_mass = torch.zeros(num_nodes, device=src.device)
+
+    contrib = 1.0 / torch.sqrt(deg[src] * deg[dst])
+    norm_mass.index_add_(0, dst, contrib)
+
+    # highest norm_mass node
+    top_nm_node = torch.argmax(norm_mass).item()
+
+    # its node_imp rank (1 = highest importance)
+    rank = (torch.argsort(node_imp, descending=True) == top_nm_node).nonzero(as_tuple=True)[0].item() + 1
+
+    print(f"lowest norm_mass node_imp rank: {rank}")
+
+    # highest node_imp node
+    top_imp_node = torch.argmax(node_imp).item()
+
+    # its norm_mass rank (1 = lowest norm_mass)
+    rank_nm = (torch.argsort(norm_mass, descending=True) == top_imp_node).nonzero(as_tuple=True)[0].item() + 1
+
+    print(f"highest node_imp norm_mass rank: {rank_nm}")
+
+    plt.scatter(norm_mass.detach().numpy(), node_imp.detach(). numpy())
+    plt.xlabel("norm_mass")
+    plt.ylabel("node_imp")
+    plt.show()
+
+    # node borders for H
+    border_colors_H = ["red" if n in top2 else "black" for n in G.nodes()]
+    border_widths_H = [2.5 if n in top2 else 0.5 for n in G.nodes()]
+
     plt.figure(figsize=(10, 5))
+
     plt.subplot(1, 2, 1)
-    nx.draw(G, posH, node_color=cH, with_labels=False, node_size=250, edge_color="#888")
-    plt.title('H')
+    nx.draw(
+        G, posH,
+        node_color=cH,
+        edgecolors=border_colors_H,
+        linewidths=border_widths_H,
+        with_labels=False, node_size=250, edge_color="#888"
+    )
+    plt.title("H")
     plt.axis("off")
 
     plt.subplot(1, 2, 2)
-    nx.draw(trees[g.y], posT, node_color=cT, with_labels=False, node_size=250, edge_color="#888")
-    plt.title('tree')
+    nx.draw(
+        trees[g.y], posT,
+        node_color=cT,
+        with_labels=False, node_size=250, edge_color="#888"
+    )
+    plt.title("tree")
     plt.axis("off")
+
     plt.tight_layout()
     plt.show()
 
@@ -624,6 +697,6 @@ def saliency_grad_diff(model, batch):
         auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
 
-    saliency = grads #.abs()
+    saliency = grads.abs()
 
     return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
