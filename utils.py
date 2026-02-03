@@ -535,6 +535,10 @@ def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
         if train:
             opt.zero_grad()
         out = model(batch.x, batch.edge_index, batch.batch)
+
+        if type(out) is tuple:
+            expl_attn_logit, out = out # separate explanation from target predictions
+
         loss = criterion(out, batch.y.view(-1))
         if train:
             loss.backward()
@@ -700,3 +704,24 @@ def saliency_grad_diff(model, batch):
     saliency = grads.abs()
 
     return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
+
+@torch.no_grad()
+def compute_plausibility(expl, batch):
+    hits = []
+    aucs = []
+    node_imp2 = expl.clone()
+    for g_id in batch.batch.unique():
+        m = (batch.batch == g_id)  # nodes of this graph
+        motif_mask_g = batch.motif_node_mask[m].bool()
+        motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
+
+        mi, ma = expl[m].min().detach(), expl[m].max().detach()
+        node_imp2[m] = (node_imp2[m] - mi) / (ma - mi + 1e-8)
+        topk_local = torch.topk(node_imp2[m], k=max(1, int(0.2 * node_imp2[m].numel()))).indices
+
+        hit_n = torch.isin(motif_idx_g, topk_local).float().mean().item()
+        hits.append(hit_n)
+
+        auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), expl[m].cpu().detach().numpy().astype(np.float32))
+        aucs.append(auc)
+    return sum(hits)/len(hits), float(np.mean(aucs))
