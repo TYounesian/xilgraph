@@ -142,7 +142,7 @@ class GATv2(nn.Module):
 
 
 class GIN(nn.Module):
-    def __init__(self, in_dim=7, hidden=10, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
         super().__init__()
 
         nn1 = nn.Sequential(

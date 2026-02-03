@@ -179,11 +179,11 @@ def run_exp(args: Arguments):
                         # Negative mask: want low saliency
                         neg_loss = torch.mean(node_imp[~gt_mask.bool()])
 
-                        if epoch % 1 == 0 and cnttt == 0:
+                        if epoch % 10 == 0 and cnttt == 0:
                             print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
                             print('confounder average:', node_imp[batch.conf_id][0])
                             print('negatives average: ',torch.mean(node_imp[0:batch.conf_id[0]]))
-                            print(pos_loss, torch.mean(node_imp[gt_mask.bool()]), neg_loss)
+                            print(pos_loss, neg_loss)
                             graphs_in_batch = batch.to_data_list()
                             g0 = graphs_in_batch[0]
                             # plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
@@ -191,31 +191,21 @@ def run_exp(args: Arguments):
                             # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
                             print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
                         expl_loss = neg_loss + pos_loss
+
                         cnttt += 1
 
-                        # positive mask: want high saliency
-                        pos_loss = -torch.mean(node_imp * gt_mask)
-                        # Negative mask: want low saliency
-                        neg_loss = torch.mean(node_imp * (1 - gt_mask))
-                        # print(pos_loss, neg_loss)
-                        if epoch % 10 == 9 and cnttt == 0:
-                            print(node_imp[gt_mask.bool()][0:6])
-                            print(node_imp[batch.conf_id][0])
-                        expl_loss = pos_loss + neg_loss
-                        cnttt += 1
-
-                        expl_loss = torch.clamp(expl_loss, min=-100, max=100)
+                        # expl_loss = torch.clamp(expl_loss, min=-100, max=100)
                     else:
                         expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
 
                         n_hit, aucs = compute_plausibility(expl_attn_logit, batch)
-
-                    log_dict = {
-                        'batch_expl_loss': expl_loss,
-                        'p_loss':pos_loss,
-                        'n_loss':neg_loss
-                    }
-                    wandb.log(log_dict)
+                    #
+                    # log_dict = {
+                    #     'batch_expl_loss': expl_loss,
+                    #     'p_loss':pos_loss,
+                    #     'n_loss':neg_loss
+                    # }
+                    # wandb.log(log_dict)
 
                     # model.train()
                     average_n_hit += n_hit
