@@ -18,6 +18,9 @@ from captum.attr import IntegratedGradients, Saliency
 from torch_geometric.nn import to_captum_model, to_captum_input
 import numpy as np
 from sklearn.metrics import roc_auc_score
+import torch.nn.functional as F
+from torch_geometric.utils import softmax
+
 
 
 SEED = 42
@@ -157,15 +160,22 @@ def add_motif_train(trees: list, edge_index: torch.Tensor, colors: torch.tensor,
 
 
 
-def make_graph(trees, G, CID, target_colors, split: str):
+def make_graph(trees, G, CID, target_colors, split, confounder_flag):
     # visualize_graph(edge_index, colors)
     edge_index = torch.tensor(list(G.edges)).t().contiguous()
     edge_index = torch.cat([edge_index, edge_index.flip(0)], dim=1)
     colors = torch.tensor([G.nodes[n]["color"] for n in G.nodes], dtype=torch.long)
 
     if split == "train":
-        attach_id = None
-        edge_index, colors, y, motif_node_ids, motif_edge_ids, attach_id, conf_id = add_motif_train_new_color(trees, edge_index, colors, CID)
+        attach_id = 1000
+        conf_id = torch.tensor([1000])
+        if confounder_flag:
+            edge_index, colors, y, motif_node_ids, motif_edge_ids, attach_id, conf_id = add_motif_train_new_color(trees, edge_index, colors, CID)
+        else:
+            edge_index, colors, y, motif_node_ids, motif_edge_ids = add_motif_eval(trees,
+                                                                                   edge_index,
+                                                                                   colors,
+                                                                                   dict(list(CID.items())[:-2]))
         # add_motif_eval(trees,
         #                                                                        edge_index,
         #                                                                        colors,
@@ -177,13 +187,14 @@ def make_graph(trees, G, CID, target_colors, split: str):
 
     else:
         attach_id = None
+        conf_id = None
         edge_index, colors, y, motif_node_ids, motif_edge_ids = add_motif_eval(trees,
                                                                                edge_index,
                                                                                colors,
                                                                                dict(list(CID.items())[:-2]))
 
     x = torch.nn.functional.one_hot(colors, num_classes=max(CID.values()) + 1).float()
-    if split == 'train':
+    if split == 'train' and confounder_flag == True:
         x[:,-2:] *= 100
     data = Data(x=x, edge_index=edge_index)
     data.y = torch.tensor(y, dtype=torch.long)
@@ -501,7 +512,11 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
             node_size=300, edge_color="#888")
 
     motif_list = motif_nodes.tolist()
-    conf_list = conf_id.detach().cpu().tolist()
+    if conf_id is not None:
+        conf_list = conf_id.detach().cpu().tolist()
+    else:
+        conf_list = []
+
     if len(motif_list):
         nx.draw_networkx_nodes(
             G, pos, nodelist=motif_list,
@@ -530,6 +545,7 @@ def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
     else:
         model.eval()
     total, correct, loss_sum = 0, 0, 0.0
+    cnttt = 0.
     for batch in loader:
         batch = batch.to(device)
         if train:
@@ -539,6 +555,15 @@ def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
         if type(out) is tuple:
             expl_attn_logit, out = out # separate explanation from target predictions
 
+        # if cnttt == 0:
+            # _, sal, n_hit, aucs = saliency_grad_diff(model, batch)
+            # node_imp = sal.sum(dim=1)
+            # graphs_in_sub_batch = batch.to_data_list()
+            # g0 = graphs_in_sub_batch[0]
+            # plot_node_importance(g0, g0.motif_node_ids, None, node_imp[0:len(g0.y_color)],
+            #                    title="Node Importance")
+            # print(batch.y, out)
+        cnttt += 1
         loss = criterion(out, batch.y.view(-1))
         if train:
             loss.backward()
@@ -705,6 +730,7 @@ def saliency_grad_diff(model, batch):
 
     return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
 
+
 @torch.no_grad()
 def compute_plausibility(expl, batch):
     hits = []
@@ -725,3 +751,97 @@ def compute_plausibility(expl, batch):
         auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), expl[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
     return sum(hits)/len(hits), float(np.mean(aucs))
+
+
+@torch.no_grad()
+def uncertainty_scores_logits(model, pool, device, method="entropy"):
+    model.eval()
+
+    all_scores = []
+    all_ids = []
+
+    for batch in pool:
+        batch = batch.to(device)
+
+        logits = model(batch.x, batch.edge_index, batch.batch)
+        probs = F.softmax(logits, dim=-1)
+
+        if method == "least-confidence":
+            scores = 1.0 - probs.max(dim=-1).values
+
+        elif method == "margin":
+            top2 = probs.topk(2, dim=-1).values
+            scores = 1.0 - (top2[:, 0] - top2[:, 1])
+
+        elif method == "entropy":
+            eps = 1e-12
+            scores = -(probs * (probs + eps).log()).sum(dim=-1)
+
+        elif method == 'random':
+            raw_scores = torch.ones(probs.size(0))
+            noise = torch.rand_like(raw_scores) * 1e-3
+            scores = raw_scores + noise
+
+        all_scores.append(scores.cpu())
+        all_ids.append(batch.graph_id.cpu())
+
+    all_scores = torch.cat(all_scores)
+    all_ids = torch.cat(all_ids)
+
+    return all_scores
+
+
+def uncertainty_scores_e(model, pool, device, method="entropy"):
+    # model.eval()
+
+    all_scores = []
+    all_ids = []
+
+    for batch in pool:
+        batch = batch.to(device)
+
+        _, sal, _, _ = saliency_grad_diff(model, batch)
+
+        node_imp_raw = sal.sum(dim=1)
+        num_graphs = int(batch.y.size(0))
+        node_imp = softmax(node_imp_raw, batch.batch, num_nodes=num_graphs)
+
+        if method == "margin":
+            top2 = node_imp.topk(2, dim=-1).values
+            scores = 1.0 - (top2[:, 0] - top2[:, 1])
+
+        elif method == "entropy":
+            eps = 1e-12
+            scores = []
+            for g in range(num_graphs):
+                mask = (batch.batch == g)
+                p = node_imp[mask]
+                N = len(p)
+
+                H = -(p * (p + eps).log()).sum()
+                H_norm = H / torch.log(torch.tensor(float(N), device=p.device))
+                scores.append(H_norm)
+
+        elif method == 'random':
+            raw_scores = torch.ones(num_graphs)
+            noise = torch.rand_like(raw_scores) * 1e-3
+            scores = raw_scores + noise
+
+        if method == 'entropy':
+            all_scores.append(torch.stack(scores).cpu())
+        else:
+            all_scores.append((scores.cpu()))
+        all_ids.append(batch.graph_id.cpu())
+
+    all_scores = torch.cat(all_scores)
+    all_ids = torch.cat(all_ids)
+
+    return all_scores
+
+
+@torch.no_grad()
+def select_topk(pool, scores, k):
+    topk_idx = torch.topk(scores, k, largest=False).indices
+    print(torch.topk(scores, k, largest=False))
+    selected_ids = [pool[i] for i in topk_idx.tolist()]
+    return selected_ids

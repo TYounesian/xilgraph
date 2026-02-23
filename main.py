@@ -6,6 +6,7 @@ from models import *
 from se_models import *
 import wandb
 from tap import Tap
+import math
 
 torch.set_num_threads(6)
 
@@ -30,13 +31,14 @@ class Arguments(Tap):
     epochs: int = 200
     runs: int = 1
     lr: float = 1e-4
-    supervision_rate: float = 0.1
+    supervision_rate: float = 1
     lam_ce: float = 1.
     lam_expl: float = 1
-    mode: str = 'passive-exp' # or 'no-supervision'
+    mode: str = 'passive-exp' # or 'no-supervision' or 'active_exp'
     log_wandb: bool = True
     model: str = 'gcn'
     explainer: str = 'post' # post | ante
+    active: str = 'least-confidence'
 
 
 def run_exp(args: Arguments):
@@ -53,7 +55,10 @@ def run_exp(args: Arguments):
 
         for _ in range(n):
             G = generate_and_check(trees, N_NODES, P_EDGE, graph_colors)
-            g = make_graph(trees, G, CID, target_colors, split)
+            confounder_flag = False
+            if split == 'train':
+                confounder_flag = random.random() < 1
+            g = make_graph(trees, G, CID, target_colors, split, confounder_flag)
             # plot_g_tree(g, trees, CID)
             graphs.append(g)
 
@@ -96,7 +101,9 @@ def run_exp(args: Arguments):
 
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
-    criterion_bce = nn.BCELoss()
+
+    for i, data in enumerate(train_set):
+        data.graph_id = torch.tensor([i])
 
     if args.mode == 'no-supervision':
         for epoch in range(1, args.epochs + 1):
@@ -151,6 +158,7 @@ def run_exp(args: Arguments):
 
             for batch in train_loader:
                 batch = batch.to(DEVICE)
+                batch_size = batch.y.view(-1).size(0)
                 out = model(batch.x, batch.edge_index, batch.batch)
 
                 if args.explainer == "ante":
@@ -162,15 +170,22 @@ def run_exp(args: Arguments):
 
                 expl_loss = torch.tensor(0.0, device=DEVICE)
 
-                chosen = (torch.rand(batch.y.view(-1).size(0), device=DEVICE) < args.supervision_rate)
-                if chosen.any():
-                    # model.eval()
+                chosen_mask = torch.zeros(batch_size)
 
+                chosen = (torch.rand(batch.y.view(-1).size(0), device=DEVICE) < args.supervision_rate)
+                chosen_mask[chosen] = 1.0
+
+                if args.supervision_rate > 0:
                     cnt += 1
-                    gt_mask = batch.motif_node_mask.to(DEVICE).float()
+                    node_mask = chosen_mask[batch.batch].bool()
+
+                    graph_indices = chosen_mask.nonzero(as_tuple=True)[0]  # graph ids in this batch
+                    sub_batch = Batch.from_data_list(batch.index_select(graph_indices))
+
+                    gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float()
 
                     if args.explainer == "post":
-                        _, sal, n_hit, aucs = saliency_grad_diff(model, batch)
+                        _, sal, n_hit, aucs = saliency_grad_diff(model, sub_batch)
 
                         node_imp = sal.sum(dim=1)
 
@@ -178,49 +193,38 @@ def run_exp(args: Arguments):
                         pos_loss = -torch.mean(node_imp[gt_mask.bool()])
                         # Negative mask: want low saliency
                         neg_loss = torch.mean(node_imp[~gt_mask.bool()])
-
-                        if epoch % 10 == 0 and cnttt == 0:
-                            print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
-                            print('confounder average:', node_imp[batch.conf_id][0])
-                            print('negatives average: ',torch.mean(node_imp[0:batch.conf_id[0]]))
-                            print(pos_loss, neg_loss)
-                            graphs_in_batch = batch.to_data_list()
-                            g0 = graphs_in_batch[0]
-                            # plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
-                            #                    title="Node Importance")
-                            # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
-                            print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
+                        #
+                        # if epoch % 10 == 0 and cnttt == 0:
+                        #     print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
+                        #     print('confounder average:', node_imp[batch.conf_id][0])
+                        #     print('negatives average: ',torch.mean(node_imp[0:batch.conf_id[0]]))
+                        #     print(pos_loss, neg_loss)
+                        #     graphs_in_batch = batch.to_data_list()
+                        #     g0 = graphs_in_batch[0]
+                        #     plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
+                        #                        title="Node Importance")
+                        #     # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
+                        # #     print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
                         expl_loss = neg_loss + pos_loss
 
                         cnttt += 1
 
-                        # expl_loss = torch.clamp(expl_loss, min=-100, max=100)
+                        log_dict = {
+                            'batch_expl_loss': expl_loss,
+                            'p_loss': pos_loss,
+                            'n_loss': neg_loss
+                        }
+                        wandb.log(log_dict)
                     else:
                         expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
 
-                        n_hit, aucs = compute_plausibility(expl_attn_logit, batch)
-                    #
-                    # log_dict = {
-                    #     'batch_expl_loss': expl_loss,
-                    #     'p_loss':pos_loss,
-                    #     'n_loss':neg_loss
-                    # }
-                    # wandb.log(log_dict)
+                        n_hit, aucs = compute_plausibility(expl_attn_logit, sub_batch)
 
-                    # model.train()
                     average_n_hit += n_hit
                     average_aucs += aucs
 
-                    # node_sel = chosen[batch.batch].float()
-                    # if node_sel.sum() > 0:
-                    #     expl_loss = F.binary_cross_entropy(
-                    #         node_imp,
-                    #         gt_mask,
-                    #         weight=node_sel,
-                    #         reduction="sum",
-                    #     ) / node_sel.sum()
-
-                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss
+                reg = (node_imp ** 2).mean()
+                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.001*reg
                 loss.backward()
 
                 opt.step()
@@ -229,69 +233,6 @@ def run_exp(args: Arguments):
                 total_expl += float(expl_loss.detach())
                 total_ce += float(ce_loss.detach())
 
-        #
-        # for epoch in range(1, args.epochs + 1):
-        #     total_loss = 0
-        #     total_expl = 0
-        #     model.train()
-        #     correct = 0.
-        #     total = 0.
-        #     cnt = 0.
-        #     average_n_hit = 0.
-        #     for g in graphs_by_splits['train']:
-        #         g = g.to(DEVICE)
-        #         gt_mask = torch.zeros(g.num_nodes)
-        #         out = model(g.x, g.edge_index, g.batch)
-        #         correct += (out.argmax(dim=-1) == g.y.view(-1)).sum().item()
-        #         total += 1
-        #         ce_loss = criterion(out, g.y.view(-1))
-        #
-        #         expl_loss = 0.0
-        #         # lam_base = 1
-        #         # lam = 0
-        #         if torch.rand(()) < args.supervision_rate and hasattr(g, "motif_node_ids"):
-        #             # get Captum explanation for this graph
-        #             model.eval()
-        #             # node_imp, n_hit, _ = captum_explain_graphs(model, g, num_samples=1, method="IntegratedGradients")
-        #             # if epoch % 5 == 0: # or epoch == 1:
-        #             #     plot_node_importance(g, g.motif_node_ids, node_imp, title="Captum Node Importance")
-        #
-        #             model.train()
-        #             cnt += 1
-        #             gt_mask[g.motif_node_ids] = 1.
-        #
-        #             # explanation loss
-        #             pos = gt_mask.sum().clamp_min(1.0)
-        #             neg = (1 - gt_mask).sum().clamp_min(1.0)
-        #             pos_weight = (neg / pos)  # >1 if positives are rare
-        #             w = torch.ones_like(gt_mask)
-        #             w[gt_mask == 1] = pos_weight  # emphasize positives
-        #
-        #             node_imp, sal, n_hit = saliency_grad_diff(model, g)
-        #
-        #             average_n_hit += n_hit
-        #
-        #             # turn node_imp into logits (zero-mean, scaled); this keeps gradient stable
-        #             #imp_logits = (node_imp - node_imp.mean().detach()) / (node_imp.std().detach() + 1e-9)
-        #
-        #             # expl_loss = F.binary_cross_entropy_with_logits(imp_logits, gt_mask, weight=w)
-        #
-        #             expl_loss = F.binary_cross_entropy(node_imp, gt_mask) #, weight=w)
-        #             # p = saliency_to_probs_single(node_imp, tau=0.25)
-        #             # q = soft_target_from_mask_single(gt_mask)
-        #
-        #             # expl_loss = F.kl_div(p.log(), q, reduction="batchmean")
-        #             # lam = lam_base * (1 + epoch / 10)
-        #
-        #         loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss
-        #         loss.backward()
-        #         # for n , p in model.named_parameters():
-        #         #     print(n,p.grad.norm())
-        #         opt.step()
-        #         opt.zero_grad()
-        #         total_loss += float(loss.detach())
-        #         total_expl += float(expl_loss)
-       
             tr_acc = correct / max(total, 1)
             total_loss = total_loss / max(len(train_loader), 1)
             total_expl = total_expl / max(len(train_loader), 1)
@@ -307,9 +248,6 @@ def run_exp(args: Arguments):
                 expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
                 val_average_n_hit, val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
-            # _, val_average_n_hit, average_e_hit = captum_explain_graphs(model, val_set, num_samples=len(val_set),
-            #                                                         method="IntegratedGradients")
-
             log_dict = {'epoch': epoch,
                         'total_loss_tr': total_loss,
                         'expl_loss': total_expl,
@@ -323,9 +261,159 @@ def run_exp(args: Arguments):
 
             if epoch % 1 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
-                      f"train loss {total_loss:.3f} expl loss {total_expl:.5f} acc {tr_acc:.3f} | val loss "
+                      f"train loss {total_loss:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f}")
                 print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit {val_average_n_hit:.3f} | train AUC {average_aucs:.3f}")
+
+        total_val_acc = val_acc
+        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)
+        total_test_acc = test_acc
+        print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
+    elif args.mode == 'active-exp':
+        explained_idx = set()  # graphs with explanation labels
+        # explained_idx.update(random.sample(range(len(train_set)), 20))
+        all_idx = set(range(n_splits['train']))
+        per_round = 10
+        for rounds in range(10):
+            # torch.manual_seed(SEED)
+            # model = GCN().to(DEVICE)
+            # opt = torch.optim.Adam(model.parameters(), lr=args.lr)
+            # criterion = nn.CrossEntropyLoss()
+            for epoch in range(1, args.epochs + 1):
+                model.train()
+
+                correct = 0.
+                total = 0.
+                cnt = 0.
+                total_loss = 0.
+                total_expl = 0.
+                total_ce = 0.
+                average_n_hit = 0.
+                average_aucs = 0.
+                cnttt = 0.
+
+                for batch in train_loader:
+                    batch = batch.to(DEVICE)
+                    batch_size = batch.y.view(-1).size(0)
+                    out = model(batch.x, batch.edge_index, batch.batch)
+
+                    if args.explainer == "ante":
+                        expl_attn_logit, out = out # separate explanation from target predictions
+
+                    correct += (out.argmax(dim=-1) == batch.y.view(-1)).sum().item()
+                    total += batch.y.view(-1).size(0)
+                    ce_loss = criterion(out, batch.y.view(-1))
+
+                    graph_ids = batch.graph_id
+                    mask = torch.tensor(
+                        [gid.item() in explained_idx for gid in graph_ids],
+                        device=batch.x.device
+                    )
+
+                    if mask.any():
+                        node_mask = mask[batch.batch].bool()
+                        sub_batch = Batch.from_data_list(batch.index_select(mask.nonzero(as_tuple=True)[0]))
+                        gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float()
+
+                        if args.explainer == "post":
+                            _, sal, n_hit, aucs = saliency_grad_diff(model, sub_batch)
+
+                            node_imp = sal.sum(dim=1)
+                            reg = (node_imp ** 2).mean()
+                            # positive mask: want high saliency
+                            pos_loss = -torch.mean(node_imp[gt_mask.bool()])
+                            # Negative mask: want low saliency
+                            neg_loss = torch.mean(node_imp[~gt_mask.bool()])
+
+                            if rounds > 4 and epoch % 10 == 0 and cnttt == 0:
+                                print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
+                                print('confounder average:', node_imp[sub_batch.conf_id][0])
+                                print('negatives average: ',torch.mean(node_imp[0:sub_batch.conf_id[0]]))
+                            #     print(pos_loss, neg_loss)
+                            #     graphs_in_sub_batch = sub_batch.to_data_list()
+                            #     g0 = graphs_in_sub_batch[0]
+                            #     plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
+                            #                        title="Node Importance")
+                            #     # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
+                            # #     print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
+                            expl_loss_sup = neg_loss + pos_loss
+                            expl_loss = expl_loss_sup * mask.sum()/batch_size
+                            cnttt += 1
+
+                            log_dict = {
+                                'batch_expl_loss': expl_loss,
+                                'p_loss': pos_loss,
+                                'n_loss': neg_loss
+                            }
+                            wandb.log(log_dict)
+
+                        else:
+                            expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
+
+                            n_hit, aucs = compute_plausibility(expl_attn_logit, sub_batch)
+
+                        average_n_hit += n_hit
+                        average_aucs += aucs
+
+                    else:
+                        expl_loss = torch.tensor(0.0, device=DEVICE)
+                        reg = torch.tensor(0.0, device=DEVICE)
+
+                    loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.01 * reg
+                    loss.backward()
+
+                    opt.step()
+                    opt.zero_grad()
+                    total_loss += float(loss.detach())
+                    total_expl += float(expl_loss.detach())
+                    total_ce += float(ce_loss.detach())
+
+                tr_acc = correct / max(total, 1)
+                total_loss = total_loss / max(len(train_loader), 1)
+                total_expl = total_expl / max(len(train_loader), 1)
+                total_ce = total_ce / max(len(train_loader), 1)
+                tr_average_n_hit = average_n_hit / max(len(train_loader), 1)
+                average_aucs = average_aucs / max(len(train_loader), 1)
+
+                val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False, device=DEVICE)
+                val_batch = Batch.from_data_list(val_set).to(DEVICE)
+                if args.explainer == "post":
+                    _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
+                else:
+                    expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
+                    val_average_n_hit, val_aucs = compute_plausibility(expl_attn_logit, val_batch)
+
+                # _, val_average_n_hit, average_e_hit = captum_explain_graphs(model, val_set, num_samples=len(val_set),
+                #                                                         method="IntegratedGradients")
+
+                log_dict = {'epoch': epoch,
+                            'total_loss_tr': total_loss,
+                            'expl_loss': total_expl,
+                            'ce_loss': total_ce,
+                            'loss_val': val_loss,
+                            'acc_tr': tr_acc,
+                            'acc_val': val_acc,
+                            'train_auc': average_aucs,
+                            'val_auc': val_aucs}
+                wandb.log(log_dict)
+
+                if epoch % 1 == 0 or epoch == 1:
+                    print(f"Round {rounds} Epoch {epoch:02d} | "
+                          f"train loss {total_loss:.3f}  ce loss {total_ce:.5f} expl loss {total_expl:.5f} reg {reg:.5f} "
+                          f"acc {tr_acc:.3f} | val loss "
+                          f"{val_loss:.3f} val acc {val_acc:.3f}")
+                    print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit "
+                          f"{val_average_n_hit:.3f} | train AUC {average_aucs:.3f} | val AUC {val_aucs: .3f}")
+
+            # Chose graphs
+            pool = list(all_idx - explained_idx)
+            pool_dataset = torch.utils.data.Subset(train_set, pool)
+            pool_loader = DataLoader(pool_dataset, batch_size=16, shuffle=False)
+
+            # scores_m = uncertainty_scores_logits(model, pool_loader, DEVICE, method=args.active)
+            scores_e = uncertainty_scores_e(model, pool_loader, DEVICE, method=args.active)
+            chosen_id = select_topk(pool, scores_e, k=per_round)
+            explained_idx.update(chosen_id)
 
         total_val_acc = val_acc
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)

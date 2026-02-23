@@ -8,7 +8,7 @@ from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GATv2Conv, GINConv, g
 # torch.manual_seed(SEED)
 
 class GCN(nn.Module):
-    def __init__(self, in_dim=7, hidden=10, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
         super().__init__()
         self.conv1 = GCNConv(in_dim, hidden)
         self.conv2 = GCNConv(hidden, hidden)
