@@ -48,7 +48,7 @@ def add_colored_node(edge_index: torch.Tensor,
     """
     device = edge_index.device
     n = len(colors)
-    k = 1
+    k = random.choice(range(1,25))
     new_ids = torch.arange(k) + n
 
     # append color
@@ -505,7 +505,7 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
 
     plt.figure(figsize=(6, 5))
     norm = matplotlib.colors.Normalize(vmin=min(colors), vmax=max(colors))
-    mapper = plt.cm.ScalarMappable(norm=norm, cmap=plt.cm.viridis)
+    mapper = plt.cm.ScalarMappable(norm=norm, cmap=plt.cm.plasma)
     face_colors = [mapper.to_rgba(c) for c in colors]
 
     nx.draw(G, pos, node_color=face_colors, with_labels=False,
@@ -521,17 +521,17 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
         nx.draw_networkx_nodes(
             G, pos, nodelist=motif_list,
             node_color=[face_colors[i] for i in motif_list],
-            node_size=420, linewidths=2.5, edgecolors="crimson"
+            node_size=420, linewidths=2.5, edgecolors="cyan"
         )
 
     if len(conf_list):
         nx.draw_networkx_nodes(
             G, pos, nodelist=conf_list,
             node_color=[face_colors[i] for i in conf_list],
-            node_size=420, linewidths=2.5, edgecolors="orange"
+            node_size=420, linewidths=2.5, edgecolors="green"
         )
 
-    sm = plt.cm.ScalarMappable(cmap=plt.cm.viridis)
+    sm = plt.cm.ScalarMappable(cmap=plt.cm.plasma)
     sm.set_array(colors)
     plt.colorbar(sm, ax=plt.gca(), label="Importance")
     plt.title(title)
@@ -843,5 +843,6 @@ def uncertainty_scores_e(model, pool, device, method="entropy"):
 def select_topk(pool, scores, k):
     topk_idx = torch.topk(scores, k, largest=False).indices
     print(torch.topk(scores, k, largest=False))
+    print(f'max: {scores.max()}, min: {scores.min()}, mean: {scores.mean()}')
     selected_ids = [pool[i] for i in topk_idx.tolist()]
     return selected_ids

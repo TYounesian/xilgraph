@@ -39,6 +39,8 @@ class Arguments(Tap):
     model: str = 'gcn'
     explainer: str = 'post' # post | ante
     active: str = 'least-confidence'
+    per_round: int = 5
+    rounds: int = 10
 
 
 def run_exp(args: Arguments):
@@ -127,12 +129,6 @@ def run_exp(args: Arguments):
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
 
-        # average_f1, average_r = grad_explainer(model, graphs_by_splits, trees)
-        # print(f'Average Train F1: {average_f1}')
-        # print(f'Average Train Recall: {average_r}')
-        # print("Top-10 node indices:", torch.topk(node_imp, k=10).indices.tolist())
-        # print("Motif node indices:", motif_nodes.tolist())
-
         # call it for each split (or just train/test)
         _, average_n_hit, average_e_hit = captum_explain_graphs(model, train_set, num_samples=len(train_set),
                                                              method="IntegratedGradients")
@@ -140,8 +136,6 @@ def run_exp(args: Arguments):
         print(f"Average motif node hit@top20% = {average_n_hit:.3f}, "
               f"Average motif edge hit@top20% = {average_e_hit:.3f}")
 
-        # captum_explain_graphs(model, val_set, num_samples=len(val_set), method="IntegratedGradients")
-        # captum_explain_graphs(model, test_set, num_samples=len(test_set), method="IntegratedGradients")
     elif args.mode == 'passive-exp':
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -263,7 +257,8 @@ def run_exp(args: Arguments):
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {total_loss:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f}")
-                print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit {val_average_n_hit:.3f} | train AUC {average_aucs:.3f}")
+                print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit {val_average_n_hit:.3f}"
+                      f" | train AUC {average_aucs:.3f} | val AUC {val_aucs:.3f}")
 
         total_val_acc = val_acc
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)
@@ -271,10 +266,11 @@ def run_exp(args: Arguments):
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
     elif args.mode == 'active-exp':
         explained_idx = set()  # graphs with explanation labels
-        # explained_idx.update(random.sample(range(len(train_set)), 20))
+        # explained_idx.update(random.sample(range(len(train_set)), 20))  # If we want to pre-train expl
         all_idx = set(range(n_splits['train']))
-        per_round = 10
-        for rounds in range(10):
+        per_round = args.per_round
+        for rounds in range(args.rounds):
+            # If re-start is needed in every round
             # torch.manual_seed(SEED)
             # model = GCN().to(DEVICE)
             # opt = torch.optim.Adam(model.parameters(), lr=args.lr)
@@ -325,10 +321,10 @@ def run_exp(args: Arguments):
                             # Negative mask: want low saliency
                             neg_loss = torch.mean(node_imp[~gt_mask.bool()])
 
-                            if rounds > 4 and epoch % 10 == 0 and cnttt == 0:
-                                print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
-                                print('confounder average:', node_imp[sub_batch.conf_id][0])
-                                print('negatives average: ',torch.mean(node_imp[0:sub_batch.conf_id[0]]))
+                            # if rounds > 4 and epoch % 10 == 0 and cnttt == 0:
+                            #     print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
+                            #     print('confounder average:', node_imp[sub_batch.conf_id][0])
+                            #     print('negatives average: ',torch.mean(node_imp[0:sub_batch.conf_id[0]]))
                             #     print(pos_loss, neg_loss)
                             #     graphs_in_sub_batch = sub_batch.to_data_list()
                             #     g0 = graphs_in_sub_batch[0]
@@ -383,9 +379,6 @@ def run_exp(args: Arguments):
                     expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
                     val_average_n_hit, val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
-                # _, val_average_n_hit, average_e_hit = captum_explain_graphs(model, val_set, num_samples=len(val_set),
-                #                                                         method="IntegratedGradients")
-
                 log_dict = {'epoch': epoch,
                             'total_loss_tr': total_loss,
                             'expl_loss': total_expl,
@@ -413,6 +406,11 @@ def run_exp(args: Arguments):
             # scores_m = uncertainty_scores_logits(model, pool_loader, DEVICE, method=args.active)
             scores_e = uncertainty_scores_e(model, pool_loader, DEVICE, method=args.active)
             chosen_id = select_topk(pool, scores_e, k=per_round)
+            conf_len = []
+            for j in chosen_id:
+                conf_len.append(len(train_set[j].conf_id))
+            print(f'conf len average {sum(conf_len)/len(conf_len)}')
+            wandb.log({'conf len': sum(conf_len)/len(conf_len)})
             explained_idx.update(chosen_id)
 
         total_val_acc = val_acc
