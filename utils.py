@@ -699,6 +699,30 @@ def plot_g_tree(g, trees, CID, node_imp=None):
     plt.show()
 
 
+def plot_cmnist(data):
+    G = to_networkx(data, to_undirected=True)
+
+    # coordinates are last 2 features
+    coords = data.x[:, -2:].cpu().numpy()
+
+    # first 3 features are RGB color
+    colors = data.x[:, :3].cpu().numpy()
+
+    pos = {i: coords[i] for i in range(coords.shape[0])}
+
+    plt.figure(figsize=(6, 6))
+    nx.draw(
+        G,
+        pos,
+        node_color=colors,
+        node_size=80,
+        with_labels=False
+    )
+    plt.title(f"Label: {data.y.item()}")
+    plt.gca().invert_yaxis()
+    plt.show()
+
+
 def saliency_to_probs_single(node_imp: torch.Tensor, tau: float = 0.25):
     return torch.softmax(node_imp / tau, dim=0)
 
@@ -734,7 +758,7 @@ def saliency_grad_diff(model, batch):
     node_imp2 = node_imp.clone()
     for g_id in batch.batch.unique():
         m = (batch.batch == g_id)  # nodes of this graph
-        motif_mask_g = batch.motif_node_mask[m].bool()
+        motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
         motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
 
         mi, ma = node_imp2[m].min().detach(), node_imp2[m].max().detach()

@@ -7,6 +7,7 @@ from se_models import *
 import wandb
 from tap import Tap
 import math
+from datasets import CPatchMNIST
 
 torch.set_num_threads(6)
 
@@ -41,6 +42,7 @@ class Arguments(Tap):
     active: str = 'least-confidence'
     per_round: int = 5
     rounds: int = 10
+    dataset: str = 'synth'
 
 
 def run_exp(args: Arguments):
@@ -51,35 +53,47 @@ def run_exp(args: Arguments):
     # Generate a tree for each class
     torch.manual_seed(SEED)
     random.seed(SEED)
-    trees = generate_trees(n_tree, tree_colors)
-    graphs_by_splits = {}
-    for split, n in n_splits.items():
-        graphs = []
+    if args.dataset == 'synth':
+        trees = generate_trees(n_tree, tree_colors)
+        graphs_by_splits = {}
+        for split, n in n_splits.items():
+            graphs = []
 
-        for _ in range(n):
-            G = generate_and_check(trees, N_NODES, P_EDGE, graph_colors)
-            confounder_flag = False
-            if split == 'train':
-                confounder_flag = True
-            g = make_graph(trees, G, CID, target_colors, split, confounder_flag)
-            # plot_g_tree(g, trees, CID)
-            graphs.append(g)
+            for _ in range(n):
+                G = generate_and_check(trees, N_NODES, P_EDGE, graph_colors)
+                confounder_flag = False
+                if split == 'train':
+                    confounder_flag = True
+                g = make_graph(trees, G, CID, target_colors, split, confounder_flag)
+                # plot_g_tree(g, trees, CID)
+                graphs.append(g)
 
-        graphs_by_splits[split] = graphs
-        # print(f'Percentage of graphs that already have at least one of the motifs: {motif_ex_count/n*100}')
+            graphs_by_splits[split] = graphs
+            # print(f'Percentage of graphs that already have at least one of the motifs: {motif_ex_count/n*100}')
 
-    train_set = graphs_by_splits['train']
-    val_set = graphs_by_splits['val']
-    test_set = graphs_by_splits['test']
+        train_set = graphs_by_splits['train']
+        val_set = graphs_by_splits['val']
+        test_set = graphs_by_splits['test']
 
-    train_loader = DataLoader(train_set, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
-    test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
+        in_dim = train_set[0].x.shape[1]
+        out_dim = int(train_set.data.y.max()) + 1
+
+    elif args.dataset == 'cmnist':
+        dataset = CPatchMNIST.load(dataset_root="./data")
+        train_set = dataset['train']
+        val_set = dataset['val']
+        test_set = dataset["id_test"]
+        in_dim = train_set[0].x.shape[1]
+        out_dim = int(train_set.data.y.max()) + 1
+
+    train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=64, shuffle=False)
+    test_loader = DataLoader(test_set, batch_size=64, shuffle=False)
 
     torch.manual_seed(SEED)
     if args.explainer == "post":
         if args.model == 'gcn':
-            model = GCN().to(DEVICE)
+            model = GCN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
         elif args.model == 'gat':
             model = GAT().to(DEVICE)
         elif args.model == 'gat2':
@@ -126,7 +140,7 @@ def run_exp(args: Arguments):
         total_val_acc = val_acc
 
         # Final test
-        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False)
+        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False)
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
 
@@ -177,7 +191,7 @@ def run_exp(args: Arguments):
                     graph_indices = chosen_mask.nonzero(as_tuple=True)[0]  # graph ids in this batch
                     sub_batch = Batch.from_data_list(batch.index_select(graph_indices))
 
-                    gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float()
+                    gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                     if args.explainer == "post":
                         _, sal, n_hit, aucs = saliency_grad_diff(model, sub_batch)
@@ -262,7 +276,7 @@ def run_exp(args: Arguments):
                       f" | train AUC {average_aucs:.3f} | val AUC {val_aucs:.3f}")
 
         total_val_acc = val_acc
-        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)
+        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
     elif args.mode == 'active-exp':
@@ -463,7 +477,7 @@ def run_exp(args: Arguments):
                 )
 
         total_val_acc = val_acc
-        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)
+        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
     return total_val_acc, total_test_acc
