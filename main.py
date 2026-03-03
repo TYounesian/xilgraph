@@ -50,6 +50,7 @@ def run_exp(args: Arguments):
                config=args.as_dict())
     # Generate a tree for each class
     torch.manual_seed(SEED)
+    random.seed(SEED)
     trees = generate_trees(n_tree, tree_colors)
     graphs_by_splits = {}
     for split, n in n_splits.items():
@@ -59,7 +60,7 @@ def run_exp(args: Arguments):
             G = generate_and_check(trees, N_NODES, P_EDGE, graph_colors)
             confounder_flag = False
             if split == 'train':
-                confounder_flag = random.random() < 1
+                confounder_flag = True
             g = make_graph(trees, G, CID, target_colors, split, confounder_flag)
             # plot_g_tree(g, trees, CID)
             graphs.append(g)
@@ -109,8 +110,8 @@ def run_exp(args: Arguments):
 
     if args.mode == 'no-supervision':
         for epoch in range(1, args.epochs + 1):
-            tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, train=True)
-            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False)
+            tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, epoch, train=True)
+            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False)
             log_dict = {'epoch': epoch,
                         'total_loss_tr': tr_loss,
                         'loss_val': val_loss,
@@ -195,7 +196,7 @@ def run_exp(args: Arguments):
                         #     print(pos_loss, neg_loss)
                         #     graphs_in_batch = batch.to_data_list()
                         #     g0 = graphs_in_batch[0]
-                        #     plot_node_importance(g0, g0.motif_node_ids, g0.conf_id, node_imp[0:len(g0.y_color)],
+                        #     plot_node_importance(g0, g0.motif_node_ids, getattr(g0, "conf_id", None), node_imp[0:len(g0.y_color)],
                         #                        title="Node Importance")
                         #     # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
                         # #     print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
@@ -234,7 +235,7 @@ def run_exp(args: Arguments):
             tr_average_n_hit = average_n_hit / cnt if cnt > 0 else 0
             average_aucs = average_aucs / cnt if cnt > 0 else 0
 
-            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False, device=DEVICE)
+            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
             if args.explainer == "post":
                 _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
@@ -287,11 +288,37 @@ def run_exp(args: Arguments):
                 average_n_hit = 0.
                 average_aucs = 0.
                 cnttt = 0.
+                cnt_b = -1
 
                 for batch in train_loader:
+                    cnt_b += 1
                     batch = batch.to(DEVICE)
                     batch_size = batch.y.view(-1).size(0)
                     out = model(batch.x, batch.edge_index, batch.batch)
+
+                    #plot all instances
+                    _, sal_b, _, _= saliency_grad_diff(model, batch)
+                    node_imp_b = sal_b.sum(dim=1)
+
+                    data_list = batch.to_data_list()
+
+                    # Plot each graph using ptr to slice node_imp correctly
+                    # if epoch > 2:
+                    #     for i, g in enumerate(data_list):
+                    #         if i<4 and cnt_b<2:
+                    #             start, end = int(batch.ptr[i]), int(batch.ptr[i + 1])
+                    #             node_imp_g = node_imp_b[start:end].detach().cpu()
+                    #             print("pos avg:", node_imp_g[g.motif_node_mask.bool()].mean().item())
+                    #             print("conf avg:", node_imp_g[g.conf_id].mean().item())
+                    #             print("neg avg:", node_imp_g[~g.motif_node_mask.bool()].mean().item())
+                    #
+                    #             plot_node_importance(
+                    #                 g,
+                    #                 g.motif_node_ids,
+                    #                 g.conf_id,
+                    #                 node_imp_g,
+                    #                 title=f"Node Importance (graph {i})",
+                    #             )
 
                     if args.explainer == "ante":
                         expl_attn_logit, out = out # separate explanation from target predictions
@@ -371,7 +398,7 @@ def run_exp(args: Arguments):
                 tr_average_n_hit = average_n_hit / max(len(train_loader), 1)
                 average_aucs = average_aucs / max(len(train_loader), 1)
 
-                val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, train=False, device=DEVICE)
+                val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
                 val_batch = Batch.from_data_list(val_set).to(DEVICE)
                 if args.explainer == "post":
                     _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
@@ -412,6 +439,28 @@ def run_exp(args: Arguments):
             print(f'conf len average {sum(conf_len)/len(conf_len)}')
             wandb.log({'conf len': sum(conf_len)/len(conf_len)})
             explained_idx.update(chosen_id)
+
+            # # plot the chosen graphs
+            chosen_dataset = torch.utils.data.Subset(train_set, chosen_id)
+            chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_id), shuffle=False)
+            batch_c = next(iter(chosen_loader))
+
+            _, sal_c, _, _ = saliency_grad_diff(model, batch_c)
+            node_imp_c = sal_c.sum(dim=1)
+
+            for graph_idx in range(batch_c.num_graphs):
+                mask_c = (batch_c.batch == graph_idx)
+                node_imp_g = node_imp_c[mask_c]
+
+                g = chosen_dataset[graph_idx]
+
+                plot_node_importance(
+                    g,
+                    g.motif_node_ids,
+                    g.conf_id,
+                    node_imp_g[: g.num_nodes],
+                    title="Node Importance of chosen",
+                )
 
         total_val_acc = val_acc
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, train=False, device=DEVICE)

@@ -167,8 +167,8 @@ def make_graph(trees, G, CID, target_colors, split, confounder_flag):
     colors = torch.tensor([G.nodes[n]["color"] for n in G.nodes], dtype=torch.long)
 
     if split == "train":
-        attach_id = 1000
-        conf_id = torch.tensor([1000])
+        attach_id = None #1000
+        conf_id = None #torch.tensor([1000])
         if confounder_flag:
             edge_index, colors, y, motif_node_ids, motif_edge_ids, attach_id, conf_id = add_motif_train_new_color(trees, edge_index, colors, CID)
         else:
@@ -203,7 +203,7 @@ def make_graph(trees, G, CID, target_colors, split, confounder_flag):
     data.motif_node_ids = motif_node_ids.long().contiguous()
     data.motif_edge_ids = motif_edge_ids.long().contiguous()
     if split == 'train':
-        data.conf_id = conf_id.long().contiguous()
+        data.conf_id = None if conf_id is None else conf_id.long().contiguous()
     if attach_id is not None:
         data.attach_id = attach_id
     mask = torch.zeros(len(x), dtype=torch.float)
@@ -539,7 +539,7 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
     plt.show()
 
 
-def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
+def run_epoch(model, loader, opt, criterion, epoch, train: bool, device="cpu"):
     if train:
         model.train()
     else:
@@ -555,15 +555,36 @@ def run_epoch(model, loader, opt, criterion, train: bool, device="cpu"):
         if type(out) is tuple:
             expl_attn_logit, out = out # separate explanation from target predictions
 
-        # if cnttt == 0:
-            # _, sal, n_hit, aucs = saliency_grad_diff(model, batch)
-            # node_imp = sal.sum(dim=1)
-            # graphs_in_sub_batch = batch.to_data_list()
-            # g0 = graphs_in_sub_batch[0]
-            # plot_node_importance(g0, g0.motif_node_ids, None, node_imp[0:len(g0.y_color)],
-            #                    title="Node Importance")
-            # print(batch.y, out)
-        cnttt += 1
+        # plot all instances
+        # _, sal_b, _, _ = saliency_grad_diff(model, batch)
+        # node_imp_b = sal_b.sum(dim=1)
+        # chosen_mask = torch.ones(batch.y.view(-1).size(0))
+        # node_mask = chosen_mask[batch.batch].bool()
+        # gt_mask = batch.motif_node_mask[node_mask].float()
+        # pos_loss = -torch.mean(node_imp_b[gt_mask.bool()])
+        # # Negative mask: want low saliency
+        # neg_loss = torch.mean(node_imp_b[~gt_mask.bool()])
+        # expl_loss = pos_loss+neg_loss
+        data_list = batch.to_data_list()
+
+        # Plot each graph using ptr to slice node_imp correctly
+        # if train and epoch > 2:
+        #     for i, g in enumerate(data_list):
+        #         if i < 4 and cnttt < 2:
+        #             start, end = int(batch.ptr[i]), int(batch.ptr[i + 1])
+        #             node_imp_g = node_imp_b[start:end].detach().cpu()
+        #             print("pos avg:", node_imp_g[g.motif_node_mask.bool()].mean().item())
+        #             print("conf avg:", node_imp_g[g.conf_id].mean().item())
+        #             print("neg avg:", node_imp_g[~g.motif_node_mask.bool()].mean().item())
+        #
+        #             plot_node_importance(
+        #                 g,
+        #                 g.motif_node_ids,
+        #                 g.conf_id,
+        #                 node_imp_g,
+        #                 title=f"Node Importance (graph {i})",
+        #             )
+        # cnttt += 1
         loss = criterion(out, batch.y.view(-1))
         if train:
             loss.backward()
@@ -603,10 +624,10 @@ def plot_g_tree(g, trees, CID, node_imp=None):
         top2 = set(np.argsort(imp)[-1:])  # indices of top 2
 
     # Degrees in the graph
-    print(
-        f"avg degree: {sum(dict(G.degree()).values()) / G.number_of_nodes():.2f}, max degree: {max(dict(G.degree()).values())}")
-    print(f"Top-1 important node's degree: {G.degree[int(np.argsort(imp)[-1:])]}")
-    print(f"rank of highest-degree node (by importance): {len(imp) - np.argsort(imp).tolist().index(max(G.degree, key=lambda x: x[1])[0])}")
+        print(
+            f"avg degree: {sum(dict(G.degree()).values()) / G.number_of_nodes():.2f}, max degree: {max(dict(G.degree()).values())}")
+        print(f"Top-1 important node's degree: {G.degree[int(np.argsort(imp)[-1:])]}")
+        print(f"rank of highest-degree node (by importance): {len(imp) - np.argsort(imp).tolist().index(max(G.degree, key=lambda x: x[1])[0])}")
 
     #get the norm_mass
     # edge_index: [2, num_edges]
