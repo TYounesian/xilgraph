@@ -76,7 +76,7 @@ def run_exp(args: Arguments):
         test_set = graphs_by_splits['test']
 
         in_dim = train_set[0].x.shape[1]
-        out_dim = int(train_set.data.y.max()) + 1
+        out_dim = 2
 
     elif args.dataset == 'cmnist':
         dataset = CPatchMNIST.load(dataset_root="./data")
@@ -462,19 +462,19 @@ def run_exp(args: Arguments):
             _, sal_c, _, _ = saliency_grad_diff(model, batch_c)
             node_imp_c = sal_c.sum(dim=1)
 
-            for graph_idx in range(batch_c.num_graphs):
-                mask_c = (batch_c.batch == graph_idx)
-                node_imp_g = node_imp_c[mask_c]
-
-                g = chosen_dataset[graph_idx]
-
-                plot_node_importance(
-                    g,
-                    g.motif_node_ids,
-                    g.conf_id,
-                    node_imp_g[: g.num_nodes],
-                    title="Node Importance of chosen",
-                )
+            # for graph_idx in range(batch_c.num_graphs):
+            #     mask_c = (batch_c.batch == graph_idx)
+            #     node_imp_g = node_imp_c[mask_c]
+            #
+            #     g = chosen_dataset[graph_idx]
+            #
+            #     plot_node_importance(
+            #         g,
+            #         g.motif_node_ids,
+            #         g.conf_id,
+            #         node_imp_g[: g.num_nodes],
+            #         title="Node Importance of chosen",
+            #     )
 
         total_val_acc = val_acc
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)

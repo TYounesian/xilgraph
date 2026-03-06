@@ -756,7 +756,12 @@ def saliency_grad_diff(model, batch):
     hits = []
     aucs = []
     node_imp2 = node_imp.clone()
-    for g_id in np.random.choice(batch.batch.unique(), 5, replace=False):
+
+    if len(batch.batch.unique()) > 5:
+        available_g = np.random.choice(batch.batch.unique(), 5, replace=False)
+    else:
+        available_g = batch.batch.unique()
+    for g_id in available_g:
         m = (batch.batch == g_id)  # nodes of this graph
         motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
         # motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
