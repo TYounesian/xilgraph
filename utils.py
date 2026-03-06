@@ -733,7 +733,7 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
     return q.clamp_min(eps)
 
 
-def saliency_grad_diff(model, batch):
+def saliency_grad_diff(model, batch, epoch):
     # model.eval()
     x = batch.x.clone().requires_grad_(True)
 
@@ -752,32 +752,29 @@ def saliency_grad_diff(model, batch):
 
     node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
 
-    hits = []
     aucs = []
     node_imp2 = node_imp.clone()
 
-    if len(batch.batch.unique()) > 5:
-        available_g = np.random.choice(batch.batch.unique(), 5, replace=False)
+    if len(batch.batch.unique()) > 10 and model.train():
+        available_g = np.random.choice(batch.batch.unique(), 10, replace=False)
+    elif model.eval():
+        available_g = np.random.choice(batch.batch.unique(), 100, replace=False)
     else:
         available_g = batch.batch.unique()
-    for g_id in available_g:
-        m = (batch.batch == g_id)  # nodes of this graph
-        motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
-        # motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
-        #
-        # mi, ma = node_imp2[m].min().detach(), node_imp2[m].max().detach()
-        # node_imp2[m] = (node_imp2[m] - mi) / (ma - mi + 1e-8)
-        # topk_local = torch.topk(node_imp2[m], k=max(1, int(0.2 * node_imp2[m].numel()))).indices
-        #
-        # hit_n = torch.isin(motif_idx_g, topk_local).float().mean().item()
-        hits.append(0)
+    if epoch % 2 == 0:
+        for g_id in available_g:
+            m = (batch.batch == g_id)  # nodes of this graph
+            motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
 
-        auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
-        aucs.append(auc)
+            auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
+            aucs.append(auc)
+    else:
+        aucs = None
 
     saliency = grads.abs()
+    auc_value = float(np.mean(aucs)) if aucs is not None else None
 
-    return node_imp2, saliency, sum(hits)/len(hits), float(np.mean(aucs))
+    return node_imp2, saliency, auc_value
 
 
 @torch.no_grad()
@@ -788,18 +785,9 @@ def compute_plausibility(expl, batch):
     for g_id in batch.batch.unique():
         m = (batch.batch == g_id)  # nodes of this graph
         motif_mask_g = batch.motif_node_mask[m].bool()
-        motif_idx_g = motif_mask_g.nonzero(as_tuple=True)[0]
-
-        mi, ma = expl[m].min().detach(), expl[m].max().detach()
-        node_imp2[m] = (node_imp2[m] - mi) / (ma - mi + 1e-8)
-        topk_local = torch.topk(node_imp2[m], k=max(1, int(0.2 * node_imp2[m].numel()))).indices
-
-        hit_n = torch.isin(motif_idx_g, topk_local).float().mean().item()
-        hits.append(hit_n)
-
         auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), expl[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
-    return sum(hits)/len(hits), float(np.mean(aucs))
+    return float(np.mean(aucs))
 
 
 @torch.no_grad()

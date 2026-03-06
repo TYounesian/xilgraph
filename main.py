@@ -77,6 +77,7 @@ def run_exp(args: Arguments):
 
         in_dim = train_set[0].x.shape[1]
         out_dim = 2
+        batch_size = 16
 
     elif args.dataset == 'cmnist':
         dataset = CPatchMNIST.load(dataset_root="./data")
@@ -85,10 +86,11 @@ def run_exp(args: Arguments):
         test_set = dataset["id_test"]
         in_dim = train_set[0].x.shape[1]
         out_dim = int(train_set.data.y.max()) + 1
+        batch_size = 128
 
-    train_loader = DataLoader(train_set, batch_size=16, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
-    test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
+    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 
     torch.manual_seed(SEED)
     if args.explainer == "post":
@@ -144,13 +146,6 @@ def run_exp(args: Arguments):
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
 
-        # call it for each split (or just train/test)
-        _, average_n_hit, average_e_hit = captum_explain_graphs(model, train_set, num_samples=len(train_set),
-                                                             method="IntegratedGradients")
-        # print(f"Average attach node hit@top20%= {average_n_hit:.3f}")
-        print(f"Average motif node hit@top20% = {average_n_hit:.3f}, "
-              f"Average motif edge hit@top20% = {average_e_hit:.3f}")
-
     elif args.mode == 'passive-exp':
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -161,7 +156,6 @@ def run_exp(args: Arguments):
             total_loss = 0.
             total_expl = 0.
             total_ce = 0.
-            average_n_hit = 0.
             average_aucs = 0.
             cnttt = 0
 
@@ -194,7 +188,7 @@ def run_exp(args: Arguments):
                     gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                     if args.explainer == "post":
-                        _, sal, n_hit, aucs = saliency_grad_diff(model, sub_batch)
+                        _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
 
                         node_imp = sal.sum(dim=1)
 
@@ -226,17 +220,16 @@ def run_exp(args: Arguments):
                         wandb.log(log_dict)
                     else:
                         expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
+                        aucs = compute_plausibility(expl_attn_logit, sub_batch)
 
-                        n_hit, aucs = compute_plausibility(expl_attn_logit, sub_batch)
-
-                    average_n_hit += n_hit
-                    average_aucs += aucs
+                    if aucs is not None:
+                        average_aucs += aucs
 
                 reg = (node_imp ** 2).mean()
                 loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.001*reg
-                loss.backward()
 
                 opt.zero_grad()
+                loss.backward()
                 opt.step()
                 total_loss += float(loss.detach())
                 total_expl += float(expl_loss.detach())
@@ -246,16 +239,15 @@ def run_exp(args: Arguments):
             total_loss = total_loss / max(len(train_loader), 1)
             total_expl = total_expl / max(len(train_loader), 1)
             total_ce = total_ce / max(len(train_loader), 1)
-            tr_average_n_hit = average_n_hit / cnt if cnt > 0 else 0
-            average_aucs = average_aucs / cnt if cnt > 0 else 0
+            average_aucs = 2*average_aucs / cnt if cnt > 0 else 0
 
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
             if args.explainer == "post":
-                _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
+                _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
             else:
                 expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
-                val_average_n_hit, val_aucs = compute_plausibility(expl_attn_logit, val_batch)
+                val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
             log_dict = {'epoch': epoch,
                         'total_loss_tr': total_loss,
@@ -263,17 +255,21 @@ def run_exp(args: Arguments):
                         'ce_loss': total_ce,
                         'loss_val': val_loss,
                         'acc_tr': tr_acc,
-                        'acc_val': val_acc,
-                        'train_auc': average_aucs,
-                        'val_auc': val_aucs}
-            wandb.log(log_dict)
+                        'acc_val': val_acc}
 
-            if epoch % 1 == 0 or epoch == 1:
+            wandb.log(log_dict)
+            if val_aucs is not None:
+                wandb.log({"auc": val_aucs})
+            if average_aucs is not None:
+                wandb.log({"auc": average_aucs})
+
+            if epoch % 1 == 0:
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {total_loss:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f}")
-                print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit {val_average_n_hit:.3f}"
-                      f" | train AUC {average_aucs:.3f} | val AUC {val_aucs:.3f}")
+                if val_aucs is None:
+                    val_aucs = 0
+                print(f"train AUC {average_aucs:.3f} | val AUC {val_aucs:.3f}")
 
         total_val_acc = val_acc
         test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
@@ -299,7 +295,6 @@ def run_exp(args: Arguments):
                 total_loss = 0.
                 total_expl = 0.
                 total_ce = 0.
-                average_n_hit = 0.
                 average_aucs = 0.
                 cnttt = 0.
                 cnt_b = -1
@@ -311,7 +306,7 @@ def run_exp(args: Arguments):
                     out = model(batch.x, batch.edge_index, batch.batch)
 
                     #plot all instances
-                    _, sal_b, _, _= saliency_grad_diff(model, batch)
+                    _, sal_b, _ = saliency_grad_diff(model, batch, epoch)
                     node_imp_b = sal_b.sum(dim=1)
 
                     data_list = batch.to_data_list()
@@ -353,7 +348,7 @@ def run_exp(args: Arguments):
                         gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float()
 
                         if args.explainer == "post":
-                            _, sal, n_hit, aucs = saliency_grad_diff(model, sub_batch)
+                            _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
 
                             node_imp = sal.sum(dim=1)
                             reg = (node_imp ** 2).mean()
@@ -387,20 +382,20 @@ def run_exp(args: Arguments):
                         else:
                             expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
 
-                            n_hit, aucs = compute_plausibility(expl_attn_logit, sub_batch)
-
-                        average_n_hit += n_hit
-                        average_aucs += aucs
+                            aucs = compute_plausibility(expl_attn_logit, sub_batch)
+                        if aucs is not None:
+                            average_aucs += aucs
 
                     else:
                         expl_loss = torch.tensor(0.0, device=DEVICE)
                         reg = torch.tensor(0.0, device=DEVICE)
 
                     loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.01 * reg
-                    loss.backward()
 
-                    opt.step()
                     opt.zero_grad()
+                    loss.backward()
+                    opt.step()
+
                     total_loss += float(loss.detach())
                     total_expl += float(expl_loss.detach())
                     total_ce += float(ce_loss.detach())
@@ -409,16 +404,15 @@ def run_exp(args: Arguments):
                 total_loss = total_loss / max(len(train_loader), 1)
                 total_expl = total_expl / max(len(train_loader), 1)
                 total_ce = total_ce / max(len(train_loader), 1)
-                tr_average_n_hit = average_n_hit / max(len(train_loader), 1)
-                average_aucs = average_aucs / max(len(train_loader), 1)
+                average_aucs = 2*average_aucs / max(len(train_loader), 1)
 
                 val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
                 val_batch = Batch.from_data_list(val_set).to(DEVICE)
                 if args.explainer == "post":
-                    _, _, val_average_n_hit, val_aucs = saliency_grad_diff(model, val_batch)
+                    _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
                 else:
                     expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
-                    val_average_n_hit, val_aucs = compute_plausibility(expl_attn_logit, val_batch)
+                    val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
                 log_dict = {'epoch': epoch,
                             'total_loss_tr': total_loss,
@@ -431,13 +425,14 @@ def run_exp(args: Arguments):
                             'val_auc': val_aucs}
                 wandb.log(log_dict)
 
-                if epoch % 1 == 0 or epoch == 1:
+                if epoch % 2 == 0:
                     print(f"Round {rounds} Epoch {epoch:02d} | "
                           f"train loss {total_loss:.3f}  ce loss {total_ce:.5f} expl loss {total_expl:.5f} reg {reg:.5f} "
                           f"acc {tr_acc:.3f} | val loss "
                           f"{val_loss:.3f} val acc {val_acc:.3f}")
-                    print(f"train average motif hit: {tr_average_n_hit:.3f} | val average motif hit "
-                          f"{val_average_n_hit:.3f} | train AUC {average_aucs:.3f} | val AUC {val_aucs: .3f}")
+                    if val_aucs is None:
+                        val_aucs = 0
+                    print(f"train AUC {average_aucs:.3f} | val AUC {val_aucs: .3f}")
 
             # Chose graphs
             pool = list(all_idx - explained_idx)
@@ -462,7 +457,7 @@ def run_exp(args: Arguments):
             chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_id), shuffle=False, num_workers=0)
             batch_c = next(iter(chosen_loader))
 
-            _, sal_c, _, _ = saliency_grad_diff(model, batch_c)
+            _, sal_c, _ = saliency_grad_diff(model, batch_c, epoch)
             node_imp_c = sal_c.sum(dim=1)
 
             torch.set_rng_state(cpu_rng)
