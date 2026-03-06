@@ -86,9 +86,9 @@ def run_exp(args: Arguments):
         in_dim = train_set[0].x.shape[1]
         out_dim = int(train_set.data.y.max()) + 1
 
-    train_loader = DataLoader(train_set, batch_size=64, shuffle=True)
-    val_loader = DataLoader(val_set, batch_size=64, shuffle=False)
-    test_loader = DataLoader(test_set, batch_size=64, shuffle=False)
+    train_loader = DataLoader(train_set, batch_size=16, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=16, shuffle=False)
+    test_loader = DataLoader(test_set, batch_size=16, shuffle=False)
 
     torch.manual_seed(SEED)
     if args.explainer == "post":
@@ -236,8 +236,8 @@ def run_exp(args: Arguments):
                 loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.001*reg
                 loss.backward()
 
-                opt.step()
                 opt.zero_grad()
+                opt.step()
                 total_loss += float(loss.detach())
                 total_expl += float(expl_loss.detach())
                 total_ce += float(ce_loss.detach())
@@ -454,13 +454,20 @@ def run_exp(args: Arguments):
             wandb.log({'conf len': sum(conf_len)/len(conf_len)})
             explained_idx.update(chosen_id)
 
-            # # plot the chosen graphs
+            cpu_rng = torch.get_rng_state()
+            cuda_rng = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
+
+            # # # plot the chosen graphs
             chosen_dataset = torch.utils.data.Subset(train_set, chosen_id)
-            chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_id), shuffle=False)
+            chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_id), shuffle=False, num_workers=0)
             batch_c = next(iter(chosen_loader))
 
             _, sal_c, _, _ = saliency_grad_diff(model, batch_c)
             node_imp_c = sal_c.sum(dim=1)
+
+            torch.set_rng_state(cpu_rng)
+            if cuda_rng is not None:
+                torch.cuda.set_rng_state(cuda_rng)
 
             # for graph_idx in range(batch_c.num_graphs):
             #     mask_c = (batch_c.batch == graph_idx)

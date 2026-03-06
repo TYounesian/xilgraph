@@ -159,7 +159,6 @@ def add_motif_train(trees: list, edge_index: torch.Tensor, colors: torch.tensor,
     return new_edge_index, new_colors, label, motif_node_ids, motif_edge_ids
 
 
-
 def make_graph(trees, G, CID, target_colors, split, confounder_flag):
     # visualize_graph(edge_index, colors)
     edge_index = torch.tensor(list(G.edges)).t().contiguous()
