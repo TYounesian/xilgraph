@@ -733,7 +733,7 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
     return q.clamp_min(eps)
 
 
-def saliency_grad_diff(model, batch, epoch):
+def saliency_grad_diff(model, batch, epoch=None):
     # model.eval()
     x = batch.x.clone().requires_grad_(True)
 
@@ -755,19 +755,20 @@ def saliency_grad_diff(model, batch, epoch):
     aucs = []
     node_imp2 = node_imp.clone()
 
-    if len(batch.batch.unique()) > 10 and model.train():
-        available_g = np.random.choice(batch.batch.unique(), 10, replace=False)
-    elif model.eval():
+    if len(batch.batch.unique()) > 5 and model.training:
+        available_g = np.random.choice(batch.batch.unique(), 5, replace=False)
+    elif not model.training and epoch is not None:
         available_g = np.random.choice(batch.batch.unique(), 100, replace=False)
     else:
         available_g = batch.batch.unique()
-    if epoch % 2 == 0:
-        for g_id in available_g:
-            m = (batch.batch == g_id)  # nodes of this graph
-            motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
+    if epoch is not None:
+        if epoch % 2 == 0:
+            for g_id in available_g:
+                m = (batch.batch == g_id)  # nodes of this graph
+                motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
 
-            auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
-            aucs.append(auc)
+                auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), node_imp[m].cpu().detach().numpy().astype(np.float32))
+                aucs.append(auc)
     else:
         aucs = None
 
@@ -837,7 +838,7 @@ def uncertainty_scores_e(model, pool, device, method="entropy"):
     for batch in pool:
         batch = batch.to(device)
 
-        _, sal, _, _ = saliency_grad_diff(model, batch)
+        _, sal, _ = saliency_grad_diff(model, batch, epoch=None)
 
         node_imp_raw = sal.sum(dim=1)
         num_graphs = int(batch.y.size(0))

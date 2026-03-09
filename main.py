@@ -239,8 +239,9 @@ def run_exp(args: Arguments):
             total_loss = total_loss / max(len(train_loader), 1)
             total_expl = total_expl / max(len(train_loader), 1)
             total_ce = total_ce / max(len(train_loader), 1)
-            average_aucs = 2*average_aucs / cnt if cnt > 0 else 0
+            average_aucs = average_aucs / max(len(train_loader), 1)
 
+            model.eval()
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
             if args.explainer == "post":
@@ -263,7 +264,7 @@ def run_exp(args: Arguments):
             if average_aucs is not None:
                 wandb.log({"auc": average_aucs})
 
-            if epoch % 1 == 0:
+            if epoch % 2 == 0:
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {total_loss:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f}")
@@ -404,8 +405,9 @@ def run_exp(args: Arguments):
                 total_loss = total_loss / max(len(train_loader), 1)
                 total_expl = total_expl / max(len(train_loader), 1)
                 total_ce = total_ce / max(len(train_loader), 1)
-                average_aucs = 2*average_aucs / max(len(train_loader), 1)
+                average_aucs = average_aucs / max(len(train_loader), 1)
 
+                model.eval()
                 val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
                 val_batch = Batch.from_data_list(val_set).to(DEVICE)
                 if args.explainer == "post":
@@ -457,7 +459,7 @@ def run_exp(args: Arguments):
             chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_id), shuffle=False, num_workers=0)
             batch_c = next(iter(chosen_loader))
 
-            _, sal_c, _ = saliency_grad_diff(model, batch_c, epoch)
+            _, sal_c, _ = saliency_grad_diff(model, batch_c, epoch=None)
             node_imp_c = sal_c.sum(dim=1)
 
             torch.set_rng_state(cpu_rng)
