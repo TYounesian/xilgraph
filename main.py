@@ -88,6 +88,7 @@ def run_exp(args: Arguments):
         out_dim = int(train_set.data.y.max()) + 1
         batch_size = 128
 
+
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
@@ -97,13 +98,13 @@ def run_exp(args: Arguments):
         if args.model == 'gcn':
             model = GCN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
         elif args.model == 'gat':
-            model = GAT().to(DEVICE)
+            model = GAT(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
         elif args.model == 'gat2':
-            model = GATv2().to(DEVICE)
+            model = GATv2(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
         elif args.model == 'gin':
-            model = GIN().to(DEVICE)
+            model = GIN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
         elif args.model == 'sage':
-            model = SAGE().to(DEVICE)
+            model = SAGE(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
     elif args.explainer == "ante":
         if args.model == 'gin':
             model = SEGIN(disable_expl=args.lam_expl == 0.0).to(DEVICE)
@@ -126,23 +127,26 @@ def run_exp(args: Arguments):
 
     if args.mode == 'no-supervision':
         for epoch in range(1, args.epochs + 1):
-            tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, epoch, train=True)
-            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False)
+            tr_loss, tr_acc = run_epoch(model, train_loader, opt, criterion, epoch, train=True, device=DEVICE)
+            val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
+            test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
             log_dict = {'epoch': epoch,
                         'total_loss_tr': tr_loss,
                         'loss_val': val_loss,
                         'acc_tr': tr_acc,
-                        'acc_val': val_acc}
+                        'acc_val': val_acc,
+                        'acc test': test_acc}
             wandb.log(log_dict)
-            if epoch % 5 == 0 or epoch == 1:
+            if epoch % 2 == 0 or epoch == 1:
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {tr_loss:.3f} acc {tr_acc:.3f} | "
-                      f"val loss {val_loss:.3f} acc {val_acc:.3f}")
+                      f"val loss {val_loss:.3f} acc {val_acc:.3f} | "
+                      f"test acc {test_acc:.3f}")
 
         total_val_acc = val_acc
 
         # Final test
-        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False)
+        test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
 
@@ -160,6 +164,7 @@ def run_exp(args: Arguments):
             cnttt = 0
 
             for batch in train_loader:
+
                 batch = batch.to(DEVICE)
                 batch_size = batch.y.view(-1).size(0)
                 out = model(batch.x, batch.edge_index, batch.batch)
@@ -173,7 +178,7 @@ def run_exp(args: Arguments):
 
                 expl_loss = torch.tensor(0.0, device=DEVICE)
 
-                chosen_mask = torch.zeros(batch_size)
+                chosen_mask = torch.zeros(batch_size, device=DEVICE)
 
                 chosen = (torch.rand(batch.y.view(-1).size(0), device=DEVICE) < args.supervision_rate)
                 chosen_mask[chosen] = 1.0
@@ -197,17 +202,22 @@ def run_exp(args: Arguments):
                         # Negative mask: want low saliency
                         neg_loss = torch.mean(node_imp[~gt_mask.bool()])
                         #
-                        # if epoch % 10 == 0 and cnttt == 0:
-                        #     print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
-                        #     print('confounder average:', node_imp[batch.conf_id][0])
-                        #     print('negatives average: ',torch.mean(node_imp[0:batch.conf_id[0]]))
-                        #     print(pos_loss, neg_loss)
-                        #     graphs_in_batch = batch.to_data_list()
-                        #     g0 = graphs_in_batch[0]
-                        #     plot_node_importance(g0, g0.motif_node_ids, getattr(g0, "conf_id", None), node_imp[0:len(g0.y_color)],
-                        #                        title="Node Importance")
-                        #     # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
-                        # #     print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
+                        if epoch % 2 == 0 and cnttt == 0:
+                            # sample = batch[12]
+                            # plot_cmnist(sample)
+                            local_sp = batch.sp_order[batch.batch == 12]
+                            conf_id = ((local_sp == 0) | (local_sp == local_sp.max())).nonzero(as_tuple=True)[0]
+                            print('positives average: ',torch.mean(node_imp[batch.batch==12][gt_mask.bool()[batch.batch==12]]))
+                            print('confounder average:', node_imp[batch.conf_id][0] if args.dataset == 'synth' else torch.mean(node_imp[batch.batch==12][conf_id]))
+                            print('negatives average: ', torch.mean(node_imp[batch.batch==12][(~gt_mask.bool())[batch.batch==12]]))
+                            print(pos_loss, neg_loss)
+                            # graphs_in_batch = batch.to_data_list()
+                            # g0 = graphs_in_batch[12]
+                            # motif_node_ids = torch.arange(sum(batch.batch==12))[batch.node_label[batch.batch==12].bool()]
+                            # plot_node_importance(g0, motif_node_ids, conf_id, node_imp[batch.batch==12],
+                            #                    title="Node Importance")
+                            # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
+                            # print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
                         expl_loss = neg_loss + pos_loss
 
                         cnttt += 1
@@ -226,7 +236,7 @@ def run_exp(args: Arguments):
                         average_aucs += aucs
 
                 reg = (node_imp ** 2).mean()
-                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.001*reg
+                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss + 0.005*reg
 
                 opt.zero_grad()
                 loss.backward()
@@ -243,6 +253,7 @@ def run_exp(args: Arguments):
 
             model.eval()
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
+            test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
             if args.explainer == "post":
                 _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
@@ -256,18 +267,19 @@ def run_exp(args: Arguments):
                         'ce_loss': total_ce,
                         'loss_val': val_loss,
                         'acc_tr': tr_acc,
-                        'acc_val': val_acc}
+                        'acc_val': val_acc,
+                        'acc test': test_acc}
 
             wandb.log(log_dict)
             if val_aucs is not None:
-                wandb.log({"auc": val_aucs})
-            if average_aucs is not None:
-                wandb.log({"auc": average_aucs})
+                wandb.log({"val_auc": val_aucs})
+            if average_aucs > 0:
+                wandb.log({"train_auc": average_aucs})
 
             if epoch % 2 == 0:
                 print(f"Epoch {epoch:02d} | "
                       f"train loss {total_loss:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
-                      f"{val_loss:.3f} val acc {val_acc:.3f}")
+                      f"{val_loss:.3f} val acc {val_acc:.3f} | test acc : {test_acc}")
                 if val_aucs is None:
                     val_aucs = 0
                 print(f"train AUC {average_aucs:.3f} | val AUC {val_aucs:.3f}")

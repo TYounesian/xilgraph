@@ -8,7 +8,7 @@ from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GATv2Conv, GINConv, g
 # torch.manual_seed(SEED)
 
 class GCN(nn.Module):
-    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=128, out_dim=2, dropout=0):
         super().__init__()
         self.conv1 = GCNConv(in_dim, hidden)
         self.conv2 = GCNConv(hidden, hidden)
@@ -142,7 +142,7 @@ class GATv2(nn.Module):
 
 
 class GIN(nn.Module):
-    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=256, out_dim=2, dropout=0):
         super().__init__()
 
         nn1 = nn.Sequential(
@@ -157,9 +157,19 @@ class GIN(nn.Module):
             nn.Linear(hidden, hidden),
             nn.ReLU(),                    
         )
+        nn4 = nn.Sequential(
+                        nn.Linear(hidden, hidden),
+                        nn.ReLU(),
+            )
+        nn5 = nn.Sequential(
+                        nn.Linear(hidden, hidden),
+                        nn.ReLU(),
+            )
         self.conv1 = GINConv(nn1)
         self.conv2 = GINConv(nn2)
         self.conv3 = GINConv(nn3)
+        self.conv4 = GINConv(nn4)
+        self.conv5 = GINConv(nn5)
         self.dropout = nn.Dropout(dropout)
         self.lin = nn.Linear(hidden, out_dim)
 
@@ -170,5 +180,7 @@ class GIN(nn.Module):
         x = self.dropout(x)
         x = F.relu(self.conv3(x, edge_index))
         x = self.dropout(x)
+        x = F.relu(self.conv4(x, edge_index))
+        x = F.relu(self.conv5(x, edge_index))
         x = global_mean_pool(x, batch)
         return self.lin(x)

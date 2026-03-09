@@ -500,7 +500,10 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
 
     # get colors and layout
     colors = [G.nodes[i]["importance"] for i in G.nodes()]
-    pos = nx.spring_layout(G, seed=42)
+    coords = graph.x[:, -2:].cpu().numpy()
+    pos = {i: coords[i] for i in range(coords.shape[0])}
+
+    # pos = nx.spring_layout(G, seed=42)
 
     plt.figure(figsize=(6, 5))
     norm = matplotlib.colors.Normalize(vmin=min(colors), vmax=max(colors))
@@ -535,6 +538,7 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
     plt.colorbar(sm, ax=plt.gca(), label="Importance")
     plt.title(title)
     plt.axis("off")
+    plt.gca().invert_yaxis()
     plt.show()
 
 
@@ -546,6 +550,7 @@ def run_epoch(model, loader, opt, criterion, epoch, train: bool, device="cpu"):
     total, correct, loss_sum = 0, 0, 0.0
     cnttt = 0.
     for batch in loader:
+        # batch.x = batch.x[:, 3:]
         batch = batch.to(device)
         if train:
             opt.zero_grad()
@@ -735,6 +740,8 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
 
 def saliency_grad_diff(model, batch, epoch=None):
     # model.eval()
+    # if batch.x.shape[1]>2:
+    #     batch.x = batch.x[:, 3:]
     x = batch.x.clone().requires_grad_(True)
 
     logits = model(x, batch.edge_index, batch.batch)
@@ -756,9 +763,9 @@ def saliency_grad_diff(model, batch, epoch=None):
     node_imp2 = node_imp.clone()
 
     if len(batch.batch.unique()) > 5 and model.training:
-        available_g = np.random.choice(batch.batch.unique(), 5, replace=False)
+        available_g = np.random.choice(batch.batch.unique().cpu(), 5, replace=False)
     elif not model.training and epoch is not None:
-        available_g = np.random.choice(batch.batch.unique(), 100, replace=False)
+        available_g = np.random.choice(batch.batch.unique().cpu(), 100, replace=False)
     else:
         available_g = batch.batch.unique()
     if epoch is not None:
@@ -773,7 +780,7 @@ def saliency_grad_diff(model, batch, epoch=None):
         aucs = None
 
     saliency = grads.abs()
-    auc_value = float(np.mean(aucs)) if aucs is not None else None
+    auc_value = float(np.mean(aucs)) if aucs is not None and len(aucs)>0 else None
 
     return node_imp2, saliency, auc_value
 
