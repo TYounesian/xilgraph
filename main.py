@@ -111,7 +111,7 @@ def run_exp(args: Arguments):
         elif args.model == 'sage':
             model = SESAGE(disable_expl=args.lam_expl == 0.0).to(DEVICE)
         elif args.model == 'gcn':
-            model = SEGCN(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+            model = SEGCN(in_dim=in_dim, out_dim=out_dim, disable_expl=args.lam_expl == 0.0).to(DEVICE)
         elif args.model == 'gat':
             model = SEGAT(disable_expl=args.lam_expl == 0.0).to(DEVICE)
         else:
@@ -230,13 +230,16 @@ def run_exp(args: Arguments):
                         wandb.log(log_dict)
                     else:
                         expl_loss = F.binary_cross_entropy_with_logits(expl_attn_logit, gt_mask)
-                        aucs = compute_plausibility(expl_attn_logit, sub_batch)
+                        if epoch % 2 == 0:
+                            aucs = compute_plausibility(expl_attn_logit, sub_batch)
+                        else:
+                            aucs = None
 
                     if aucs is not None:
                         average_aucs += aucs
 
-                reg = (node_imp ** 2).mean()
-                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss + 0.005*reg
+                reg = 0 #(node_imp ** 2).mean()
+                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.005*reg
 
                 opt.zero_grad()
                 loss.backward()

@@ -790,9 +790,10 @@ def compute_plausibility(expl, batch):
     hits = []
     aucs = []
     node_imp2 = expl.clone()
+
     for g_id in batch.batch.unique():
         m = (batch.batch == g_id)  # nodes of this graph
-        motif_mask_g = batch.motif_node_mask[m].bool()
+        motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
         auc = roc_auc_score(motif_mask_g.cpu().numpy().astype(np.int32), expl[m].cpu().detach().numpy().astype(np.float32))
         aucs.append(auc)
     return float(np.mean(aucs))
