@@ -1,3 +1,5 @@
+import pdb
+
 import torch
 from torch_geometric.loader import DataLoader
 from torch_geometric.data import Batch
@@ -8,6 +10,7 @@ import wandb
 from tap import Tap
 import math
 from datasets import CPatchMNIST
+import pdb
 
 torch.set_num_threads(6)
 
@@ -43,6 +46,9 @@ class Arguments(Tap):
     per_round: int = 5
     rounds: int = 10
     dataset: str = 'synth'
+    only_neg: bool = False
+    id_test: bool = False
+    binary: bool = False
 
 
 def run_exp(args: Arguments):
@@ -81,13 +87,33 @@ def run_exp(args: Arguments):
 
     elif args.dataset == 'cmnist':
         dataset = CPatchMNIST.load(dataset_root="./data")
-        train_set = dataset['train']
-        val_set = dataset['val']
-        test_set = dataset["id_test"]
+        def keep_zero_one(dataset):
+            idx = [i for i, d in enumerate(dataset) if d.y.item() in (0, 1)]
+            return dataset[idx]
+        if args.binary:
+            train_set = keep_zero_one(dataset["train"])
+            val_set = keep_zero_one(dataset["val"])
+            if args.id_test:
+                test_set = keep_zero_one(dataset["id_test"])
+            else:
+                test_set = keep_zero_one(dataset["test"])
+        else:
+            train_set = dataset['train']
+            val_set = dataset['val']
+
+            if args.id_test:
+                test_set = dataset["id_test"]
+            else:
+                test_set = dataset["test"]
+
+        if args.id_test:
+            test_set = dataset["id_test"]
+        else:
+            test_set = dataset["test"]
+
         in_dim = train_set[0].x.shape[1]
         out_dim = int(train_set.data.y.max()) + 1
         batch_size = 128
-
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
@@ -107,13 +133,13 @@ def run_exp(args: Arguments):
             model = SAGE(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
     elif args.explainer == "ante":
         if args.model == 'gin':
-            model = SEGIN(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+            model = SEGIN(in_dim=in_dim, out_dim=out_dim, disable_expl=args.lam_expl == 0.0).to(DEVICE)
         elif args.model == 'sage':
-            model = SESAGE(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+            model = SESAGE(in_dim=in_dim, out_dim=out_dim, disable_expl=args.lam_expl == 0.0).to(DEVICE)
         elif args.model == 'gcn':
             model = SEGCN(in_dim=in_dim, out_dim=out_dim, disable_expl=args.lam_expl == 0.0).to(DEVICE)
         elif args.model == 'gat':
-            model = SEGAT(disable_expl=args.lam_expl == 0.0).to(DEVICE)
+            model = SEGAT(in_dim=in_dim, out_dim=out_dim, disable_expl=args.lam_expl == 0.0).to(DEVICE)
         else:
             raise NotImplementedError(f"{args.model} not yet implemented for {args.explainer} modality")
     else:
@@ -122,8 +148,9 @@ def run_exp(args: Arguments):
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     criterion = nn.CrossEntropyLoss()
 
-    for i, data in enumerate(train_set):
-        data.graph_id = torch.tensor([i])
+    if args.dataset == 'synth':
+        for i, data in enumerate(train_set):
+            data.idx = torch.tensor([i])
 
     if args.mode == 'no-supervision':
         for epoch in range(1, args.epochs + 1):
@@ -193,6 +220,7 @@ def run_exp(args: Arguments):
                     gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                     if args.explainer == "post":
+                        opt.zero_grad()
                         _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
 
                         node_imp = sal.sum(dim=1)
@@ -218,7 +246,10 @@ def run_exp(args: Arguments):
                             #                    title="Node Importance")
                             # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
                             # print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
-                        expl_loss = neg_loss + pos_loss
+                        if args.only_neg:
+                            expl_loss = neg_loss
+                        else:
+                            expl_loss = neg_loss + pos_loss
 
                         cnttt += 1
 
@@ -239,6 +270,8 @@ def run_exp(args: Arguments):
                         average_aucs += aucs
 
                 reg = 0 #(node_imp ** 2).mean()
+                # print(expl_loss, ce_loss)
+                # pdb.set_trace()
                 loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.005*reg
 
                 opt.zero_grad()
@@ -294,7 +327,7 @@ def run_exp(args: Arguments):
     elif args.mode == 'active-exp':
         explained_idx = set()  # graphs with explanation labels
         # explained_idx.update(random.sample(range(len(train_set)), 20))  # If we want to pre-train expl
-        all_idx = set(range(n_splits['train']))
+        all_idx = set(range(len(train_set)))
         per_round = args.per_round
         for rounds in range(args.rounds):
             # If re-start is needed in every round
@@ -352,7 +385,7 @@ def run_exp(args: Arguments):
                     total += batch.y.view(-1).size(0)
                     ce_loss = criterion(out, batch.y.view(-1))
 
-                    graph_ids = batch.graph_id
+                    graph_ids = batch.idx
                     mask = torch.tensor(
                         [gid.item() in explained_idx for gid in graph_ids],
                         device=batch.x.device
@@ -361,7 +394,7 @@ def run_exp(args: Arguments):
                     if mask.any():
                         node_mask = mask[batch.batch].bool()
                         sub_batch = Batch.from_data_list(batch.index_select(mask.nonzero(as_tuple=True)[0]))
-                        gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float()
+                        gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                         if args.explainer == "post":
                             _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
@@ -384,7 +417,12 @@ def run_exp(args: Arguments):
                             #                        title="Node Importance")
                             #     # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
                             # #     print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
-                            expl_loss_sup = neg_loss + pos_loss
+
+                            if args.only_neg:
+                                expl_loss_sup = neg_loss
+                            else:
+                                expl_loss_sup = neg_loss + pos_loss
+
                             expl_loss = expl_loss_sup * mask.sum()/batch_size
                             cnttt += 1
 
@@ -424,29 +462,31 @@ def run_exp(args: Arguments):
 
                 model.eval()
                 val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
+                test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
                 val_batch = Batch.from_data_list(val_set).to(DEVICE)
-                if args.explainer == "post":
-                    _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
-                else:
-                    expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
-                    val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
-                log_dict = {'epoch': epoch,
-                            'total_loss_tr': total_loss,
-                            'expl_loss': total_expl,
-                            'ce_loss': total_ce,
-                            'loss_val': val_loss,
-                            'acc_tr': tr_acc,
-                            'acc_val': val_acc,
-                            'train_auc': average_aucs,
-                            'val_auc': val_aucs}
-                wandb.log(log_dict)
+                if epoch % 5 == 0:
+                    if args.explainer == "post":
+                        _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
+                    else:
+                        expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
+                        val_aucs = compute_plausibility(expl_attn_logit, val_batch)
 
-                if epoch % 2 == 0:
+                    log_dict = {'epoch': epoch,
+                                'total_loss_tr': total_loss,
+                                'expl_loss': total_expl,
+                                'ce_loss': total_ce,
+                                'loss_val': val_loss,
+                                'acc_tr': tr_acc,
+                                'acc_val': val_acc,
+                                'train_auc': average_aucs,
+                                'val_auc': val_aucs}
+                    wandb.log(log_dict)
+
                     print(f"Round {rounds} Epoch {epoch:02d} | "
                           f"train loss {total_loss:.3f}  ce loss {total_ce:.5f} expl loss {total_expl:.5f} reg {reg:.5f} "
                           f"acc {tr_acc:.3f} | val loss "
-                          f"{val_loss:.3f} val acc {val_acc:.3f}")
+                          f"{val_loss:.3f} val acc {val_acc:.3f} test acc {test_acc}")
                     if val_aucs is None:
                         val_aucs = 0
                     print(f"train AUC {average_aucs:.3f} | val AUC {val_aucs: .3f}")
@@ -459,11 +499,11 @@ def run_exp(args: Arguments):
             # scores_m = uncertainty_scores_logits(model, pool_loader, DEVICE, method=args.active)
             scores_e = uncertainty_scores_e(model, pool_loader, DEVICE, method=args.active)
             chosen_id = select_topk(pool, scores_e, k=per_round)
-            conf_len = []
-            for j in chosen_id:
-                conf_len.append(len(train_set[j].conf_id))
-            print(f'conf len average {sum(conf_len)/len(conf_len)}')
-            wandb.log({'conf len': sum(conf_len)/len(conf_len)})
+            # conf_len = []
+            # for j in chosen_id:
+            #     conf_len.append(len(train_set[j].conf_id))
+            # print(f'conf len average {sum(conf_len)/len(conf_len)}')
+            # wandb.log({'conf len': sum(conf_len)/len(conf_len)})
             explained_idx.update(chosen_id)
 
             cpu_rng = torch.get_rng_state()

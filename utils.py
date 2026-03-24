@@ -756,8 +756,36 @@ def saliency_grad_diff(model, batch, epoch=None):
         retain_graph=True
     )[0]
     # model.train()
+    #
+    # feature_grad = grads.abs().mean(axis=0).detach().numpy()
+    #
+    # plt.bar(range(len(feature_grad)), feature_grad)
+    # plt.xlabel("Feature")
+    # plt.ylabel("Average Gradient")
+    # plt.title("Average Gradient per Feature")
+    # plt.show()
+    # plot_cmnist(batch.to_data_list()[0])
+    node_imp = (grads[:,:3].pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
+    # import pdb;pdb.set_trace()
+    conf_mask = (batch.sp_order == 0) | (batch.sp_order == batch.sp_order.max())
+    digit_mask = batch.node_label.bool()
 
-    node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
+    # abs grads
+    # g = grads.abs()
+    #
+    # # RGB part (features 0–2)
+    # node_grad_rgb = g[:, 0:3].sum(dim=1)
+    #
+    # # rest of features (4:)
+    # # node_grad_rest = g[:, 4:].sum(dim=1)
+    #
+    # print("RGB conf:", node_grad_rgb[conf_mask].mean())
+    # print("RGB digit:", node_grad_rgb[digit_mask].mean())
+    #
+    # # print("REST conf:", node_grad_rest[conf_mask].mean())
+    # # print("REST digit:", node_grad_rest[digit_mask].mean())
+    # # print("--------------------------------------------")
+
 
     aucs = []
     node_imp2 = node_imp.clone()
@@ -769,7 +797,7 @@ def saliency_grad_diff(model, batch, epoch=None):
     else:
         available_g = batch.batch.unique()
     if epoch is not None:
-        if epoch % 2 == 0:
+        if epoch % 5 == 0:
             for g_id in available_g:
                 m = (batch.batch == g_id)  # nodes of this graph
                 motif_mask_g = batch.motif_node_mask[m].bool() if batch.x.shape[1] == 7 else batch.node_label[m].bool()
@@ -779,7 +807,7 @@ def saliency_grad_diff(model, batch, epoch=None):
     else:
         aucs = None
 
-    saliency = grads.abs()
+    saliency = grads.pow(2) #.abs()
     auc_value = float(np.mean(aucs)) if aucs is not None and len(aucs)>0 else None
 
     return node_imp2, saliency, auc_value
@@ -829,7 +857,7 @@ def uncertainty_scores_logits(model, pool, device, method="entropy"):
             scores = raw_scores + noise
 
         all_scores.append(scores.cpu())
-        all_ids.append(batch.graph_id.cpu())
+        all_ids.append(batch.idx.cpu())
 
     all_scores = torch.cat(all_scores)
     all_ids = torch.cat(all_ids)
@@ -877,7 +905,7 @@ def uncertainty_scores_e(model, pool, device, method="entropy"):
             all_scores.append(torch.stack(scores).cpu())
         else:
             all_scores.append((scores.cpu()))
-        all_ids.append(batch.graph_id.cpu())
+        all_ids.append(batch.idx.cpu())
 
     all_scores = torch.cat(all_scores)
     all_ids = torch.cat(all_ids)
