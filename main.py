@@ -106,11 +106,6 @@ def run_exp(args: Arguments):
             else:
                 test_set = dataset["test"]
 
-        if args.id_test:
-            test_set = dataset["id_test"]
-        else:
-            test_set = dataset["test"]
-
         in_dim = train_set[0].x.shape[1]
         out_dim = int(train_set.data.y.max()) + 1
         batch_size = 128
@@ -190,6 +185,9 @@ def run_exp(args: Arguments):
             average_aucs = 0.
             cnttt = 0
 
+            pos_sum, pos_count = 0.0, 0
+            neg_sum, neg_count = 0.0, 0
+            conf_sum, conf_count = 0.0, 0
             for batch in train_loader:
 
                 batch = batch.to(DEVICE)
@@ -230,15 +228,34 @@ def run_exp(args: Arguments):
                         # Negative mask: want low saliency
                         neg_loss = torch.mean(node_imp[~gt_mask.bool()])
                         #
-                        if epoch % 2 == 0 and cnttt == 0:
-                            # sample = batch[12]
-                            # plot_cmnist(sample)
-                            local_sp = batch.sp_order[batch.batch == 12]
-                            conf_id = ((local_sp == 0) | (local_sp == local_sp.max())).nonzero(as_tuple=True)[0]
-                            print('positives average: ',torch.mean(node_imp[batch.batch==12][gt_mask.bool()[batch.batch==12]]))
-                            print('confounder average:', node_imp[batch.conf_id][0] if args.dataset == 'synth' else torch.mean(node_imp[batch.batch==12][conf_id]))
-                            print('negatives average: ', torch.mean(node_imp[batch.batch==12][(~gt_mask.bool())[batch.batch==12]]))
-                            print(pos_loss, neg_loss)
+                        if epoch % 2 == 0:
+                            # Positive nodes
+                            pos_vals = node_imp[gt_mask.bool()]
+                            pos_sum += pos_vals.sum().item()
+                            pos_count += pos_vals.numel()
+
+                            # Negative nodes
+                            neg_vals = node_imp[~gt_mask.bool()]
+                            neg_sum += neg_vals.sum().item()
+                            neg_count += neg_vals.numel()
+
+                            if args.dataset == 'synth':
+                                conf_vals = node_imp[batch.conf_id]
+                            else:
+                                # compute per-graph confounders
+                                for g in graph_indices:
+                                    mask = (batch.batch == g)
+
+                                    local_sp = batch.sp_order[mask]
+                                    conf_id = ((local_sp == 0) | (local_sp == local_sp.max())).nonzero(as_tuple=True)[0]
+
+                                    node_imp_g = node_imp[mask]
+
+                                    conf_vals = node_imp_g[conf_id]
+
+                                    conf_sum += conf_vals.sum().item()
+                                    conf_count += conf_vals.numel()
+
                             # graphs_in_batch = batch.to_data_list()
                             # g0 = graphs_in_batch[12]
                             # motif_node_ids = torch.arange(sum(batch.batch==12))[batch.node_label[batch.batch==12].bool()]
@@ -250,8 +267,6 @@ def run_exp(args: Arguments):
                             expl_loss = neg_loss
                         else:
                             expl_loss = neg_loss + pos_loss
-
-                        cnttt += 1
 
                         log_dict = {
                             'batch_expl_loss': expl_loss,
@@ -286,6 +301,23 @@ def run_exp(args: Arguments):
             total_expl = total_expl / max(len(train_loader), 1)
             total_ce = total_ce / max(len(train_loader), 1)
             average_aucs = average_aucs / max(len(train_loader), 1)
+
+            pos_avg = pos_sum / pos_count if pos_count > 0 else 0
+            neg_avg = neg_sum / neg_count if neg_count > 0 else 0
+            conf_avg = conf_sum / conf_count if conf_count > 0 else 0
+
+            if epoch % 2 == 0:
+                print(f"Epoch {epoch}")
+                print("positives average:", pos_avg)
+                print("negatives average:", neg_avg)
+                print("confounder average:", conf_avg)
+
+                log_dict = {
+                    'positives average': pos_avg,
+                    'negatives average': neg_avg,
+                    'confounder average': conf_avg
+                }
+                wandb.log(log_dict)
 
             model.eval()
             val_loss, val_acc = run_epoch(model, val_loader, opt, criterion, epoch, train=False, device=DEVICE)
@@ -326,8 +358,9 @@ def run_exp(args: Arguments):
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
     elif args.mode == 'active-exp':
         explained_idx = set()  # graphs with explanation labels
-        # explained_idx.update(random.sample(range(len(train_set)), 20))  # If we want to pre-train expl
-        all_idx = set(range(len(train_set)))
+        all_idx = {data.idx.item() for data in train_set}
+        # explained_idx.update(random.sample(all_idx, len(train_set)))  # If we want to pre-train expl
+
         per_round = args.per_round
         for rounds in range(args.rounds):
             # If re-start is needed in every round
@@ -335,7 +368,11 @@ def run_exp(args: Arguments):
             # model = GCN().to(DEVICE)
             # opt = torch.optim.Adam(model.parameters(), lr=args.lr)
             # criterion = nn.CrossEntropyLoss()
-            for epoch in range(1, args.epochs + 1):
+            if rounds == 0:
+                tot_epoch = 5
+            else:
+                tot_epoch = args.epochs + 1
+            for epoch in range(1, tot_epoch):
                 model.train()
 
                 correct = 0.
@@ -355,10 +392,10 @@ def run_exp(args: Arguments):
                     out = model(batch.x, batch.edge_index, batch.batch)
 
                     #plot all instances
-                    _, sal_b, _ = saliency_grad_diff(model, batch, epoch)
-                    node_imp_b = sal_b.sum(dim=1)
+                    # _, sal_b, _ = saliency_grad_diff(model, batch, epoch)
+                    # node_imp_b = sal_b.sum(dim=1)
 
-                    data_list = batch.to_data_list()
+                    # data_list = batch.to_data_list()
 
                     # Plot each graph using ptr to slice node_imp correctly
                     # if epoch > 2:
@@ -397,6 +434,7 @@ def run_exp(args: Arguments):
                         gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                         if args.explainer == "post":
+                            opt.zero_grad()
                             _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
 
                             node_imp = sal.sum(dim=1)
@@ -498,7 +536,7 @@ def run_exp(args: Arguments):
 
             # scores_m = uncertainty_scores_logits(model, pool_loader, DEVICE, method=args.active)
             scores_e = uncertainty_scores_e(model, pool_loader, DEVICE, method=args.active)
-            chosen_id = select_topk(pool, scores_e, k=per_round)
+            chosen_id = select_topk(pool, scores_e, k=min(per_round, len(scores_e)))
             # conf_len = []
             # for j in chosen_id:
             #     conf_len.append(len(train_set[j].conf_id))

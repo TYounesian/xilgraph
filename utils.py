@@ -765,7 +765,7 @@ def saliency_grad_diff(model, batch, epoch=None):
     # plt.title("Average Gradient per Feature")
     # plt.show()
     # plot_cmnist(batch.to_data_list()[0])
-    node_imp = (grads[:,:3].pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
+    node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
     # import pdb;pdb.set_trace()
     conf_mask = (batch.sp_order == 0) | (batch.sp_order == batch.sp_order.max())
     digit_mask = batch.node_label.bool()
