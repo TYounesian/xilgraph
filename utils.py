@@ -489,11 +489,11 @@ def plot_node_importance(graph, motif_nodes, conf_id, node_imp, title="Node impo
         G = graph
 
     # convert importance tensor to numpy
-    node_imp = torch.as_tensor(node_imp, dtype=torch.float).detach().cpu()
+    node_imp_c = torch.as_tensor(node_imp, dtype=torch.float).detach().cpu()
     # node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-9)  # normalize 0–1
 
     # assign as node attributes for plotting
-    for i, score in enumerate(node_imp.tolist()):
+    for i, score in enumerate(node_imp_c.tolist()):
         G.nodes[i]["importance"] = score
 
     motif_nodes = torch.as_tensor(motif_nodes, dtype=torch.long).detach().cpu().unique()
@@ -757,7 +757,7 @@ def saliency_grad_diff(model, batch, epoch=None):
     )[0]
     # model.train()
     #
-    # feature_grad = grads.abs().mean(axis=0).detach().numpy()
+    # feature_grad = grads.pow(2).mean(axis=0).detach().numpy()
     #
     # plt.bar(range(len(feature_grad)), feature_grad)
     # plt.xlabel("Feature")
@@ -765,27 +765,74 @@ def saliency_grad_diff(model, batch, epoch=None):
     # plt.title("Average Gradient per Feature")
     # plt.show()
     # plot_cmnist(batch.to_data_list()[0])
+
+    # per_graph_feat_imp = []
+    #
+    # for g_id in range(batch.num_graphs):
+    #     g_mask = (batch.batch == g_id)
+    #     g_grads = grads[g_mask]
+    #     per_graph_feat_imp.append(g_grads.pow(2).mean(dim=0))
+    #
+    # per_graph_feat_imp = torch.stack(per_graph_feat_imp)
+    #
+    # mean_imp = per_graph_feat_imp.mean(dim=0).detach().numpy()
+    # std_imp = per_graph_feat_imp.std(dim=0).detach().numpy()
+    #
+    # plt.bar(range(len(mean_imp)), mean_imp, yerr=std_imp)
+    # plt.title("Feature importance (mean ± std)")
+    # plt.show()
+    #
+    # dominant_feat = per_graph_feat_imp.argmax(dim=1)
+    # plt.hist(dominant_feat.cpu().numpy(), bins=range(grads.shape[1] + 1))
+    # plt.title("Dominant feature per graph")
+    # plt.show()
+    #
+    # g_id = (dominant_feat == 1).nonzero(as_tuple=True)[0][0].item()
+    # g_mask = (batch.batch == g_id)
+    # g_grads = grads[g_mask]
+    # node_imp = g_grads[:, 1].pow(2)
+    # gg = batch.to_data_list()[g_id]
+    # conf_mask = (gg.sp_order == 0) | (gg.sp_order == gg.sp_order.max())
+    # digit_mask = gg.node_label.bool()
+    #
+    # print("conf nodes mean:", node_imp[conf_mask].mean().item())
+    # print("other nodes mean:", node_imp[~conf_mask].mean().item())
+    #
+    # plot_node_importance(
+    #     gg,
+    #     digit_mask.nonzero(as_tuple=True)[0],
+    #     conf_mask.nonzero(as_tuple=True)[0],
+    #     node_imp,
+    #     title=f"Graph {g_id} (feature 1 dominant)"
+    # )
+
+
     node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
     # import pdb;pdb.set_trace()
-    conf_mask = (batch.sp_order == 0) | (batch.sp_order == batch.sp_order.max())
-    digit_mask = batch.node_label.bool()
+    # conf_mask = (batch.sp_order == 0) | (batch.sp_order == batch.sp_order.max())
+    # digit_mask = batch.node_label.bool()
+    # graph_mask = (batch.batch == 0)
+    # conf_mask_0 = conf_mask & graph_mask
+    # digit_mask_0 = digit_mask & graph_mask
+    # plot_node_importance(batch.to_data_list()[0], digit_mask_0.nonzero(as_tuple=True)[0], conf_mask_0.nonzero(as_tuple=True)[0], grads[:len(batch.to_data_list()[0].sp_order),1].pow(2),
+    #                      title="Node Importance")
 
-    # abs grads
+    # # abs grads
     # g = grads.abs()
     #
     # # RGB part (features 0–2)
-    # node_grad_rgb = g[:, 0:3].sum(dim=1)
+    # node_grad_rgb = g[:, :3].sum(dim=1)
     #
     # # rest of features (4:)
-    # # node_grad_rest = g[:, 4:].sum(dim=1)
+    # node_grad_rest = g[:, 4:].sum(dim=1)
     #
     # print("RGB conf:", node_grad_rgb[conf_mask].mean())
     # print("RGB digit:", node_grad_rgb[digit_mask].mean())
     #
-    # # print("REST conf:", node_grad_rest[conf_mask].mean())
-    # # print("REST digit:", node_grad_rest[digit_mask].mean())
-    # # print("--------------------------------------------")
-
+    # print("REST conf:", node_grad_rest[conf_mask].mean())
+    # print("REST digit:", node_grad_rest[digit_mask].mean())
+    # print("--------------------------------------------")
+    # #
 
     aucs = []
     node_imp2 = node_imp.clone()

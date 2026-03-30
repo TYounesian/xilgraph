@@ -1,18 +1,20 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GATv2Conv, GINConv, global_mean_pool, global_add_pool
+from torch_geometric.nn import SAGEConv, GCNConv, GATConv, GATv2Conv, GINConv, global_mean_pool, global_add_pool, global_max_pool
 
 
 # SEED = 42
 # torch.manual_seed(SEED)
 
 class GCN(nn.Module):
-    def __init__(self, in_dim=7, hidden=128, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=256, out_dim=2, dropout=0):
         super().__init__()
         self.conv1 = GCNConv(in_dim, hidden)
         self.conv2 = GCNConv(hidden, hidden)
         self.conv3 = GCNConv(hidden, hidden)
+        self.conv4 = GCNConv(hidden, hidden)
+        self.conv5 = GCNConv(hidden, hidden)
         self.dropout = nn.Dropout(dropout)
         self.lin = nn.Linear(hidden, out_dim)
 
@@ -20,6 +22,10 @@ class GCN(nn.Module):
         x = F.relu(self.conv1(x, edge_index))
         x = self.dropout(x)
         x = F.relu(self.conv2(x, edge_index))
+        x = self.dropout(x)
+        x = F.relu(self.conv3(x, edge_index))
+        x = self.dropout(x)
+        x = F.relu(self.conv3(x, edge_index))
         x = self.dropout(x)
         x = F.relu(self.conv3(x, edge_index))
         x = self.dropout(x)
@@ -182,5 +188,5 @@ class GIN(nn.Module):
         x = self.dropout(x)
         x = F.relu(self.conv4(x, edge_index))
         x = F.relu(self.conv5(x, edge_index))
-        x = global_mean_pool(x, batch)
+        x = global_add_pool(x, batch)
         return self.lin(x)

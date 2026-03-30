@@ -10,6 +10,7 @@ import wandb
 from tap import Tap
 import math
 from datasets import CPatchMNIST
+from torch_geometric.data import InMemoryDataset
 import pdb
 
 torch.set_num_threads(6)
@@ -87,9 +88,15 @@ def run_exp(args: Arguments):
 
     elif args.dataset == 'cmnist':
         dataset = CPatchMNIST.load(dataset_root="./data")
+
+        class FilteredDataset(InMemoryDataset):
+            def __init__(self, data_list):
+                super().__init__(root='')  # dummy root
+                self.data, self.slices = self.collate(data_list)
+
         def keep_zero_one(dataset):
-            idx = [i for i, d in enumerate(dataset) if d.y.item() in (0, 1)]
-            return dataset[idx]
+            data_list = [d for d in dataset if d.y.item() in (0, 1)]
+            return FilteredDataset(data_list)
         if args.binary:
             train_set = keep_zero_one(dataset["train"])
             val_set = keep_zero_one(dataset["val"])
@@ -110,7 +117,7 @@ def run_exp(args: Arguments):
         out_dim = int(train_set.data.y.max()) + 1
         batch_size = 128
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True)
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=False)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 
@@ -242,7 +249,6 @@ def run_exp(args: Arguments):
                             if args.dataset == 'synth':
                                 conf_vals = node_imp[batch.conf_id]
                             else:
-                                # compute per-graph confounders
                                 for g in graph_indices:
                                     mask = (batch.batch == g)
 
@@ -250,17 +256,21 @@ def run_exp(args: Arguments):
                                     conf_id = ((local_sp == 0) | (local_sp == local_sp.max())).nonzero(as_tuple=True)[0]
 
                                     node_imp_g = node_imp[mask]
-
                                     conf_vals = node_imp_g[conf_id]
 
-                                    conf_sum += conf_vals.sum().item()
-                                    conf_count += conf_vals.numel()
+                            conf_sum += conf_vals.sum().item()
+                            conf_count += conf_vals.numel()
 
-                            # graphs_in_batch = batch.to_data_list()
-                            # g0 = graphs_in_batch[12]
-                            # motif_node_ids = torch.arange(sum(batch.batch==12))[batch.node_label[batch.batch==12].bool()]
-                            # plot_node_importance(g0, motif_node_ids, conf_id, node_imp[batch.batch==12],
-                            #                    title="Node Importance")
+                            if epoch > -1 and cnt <4:
+                                graphs_in_batch = batch.to_data_list()
+                                g0 = graphs_in_batch[12]
+                                print(f'label {g0.y}, out {out[12,:].argmax()}')
+
+                                # # import pdb;pdb.set_trace()
+                                # motif_node_ids = torch.arange(sum(batch.batch==12))[batch.node_label[batch.batch==12].bool()]
+                                # conf_id_g = ((batch.sp_order[batch.batch==12] == 0) | (batch.sp_order[batch.batch==12] == batch.sp_order[batch.batch==12].max())).nonzero(as_tuple=True)[0]
+                                # plot_node_importance(g0, motif_node_ids, conf_id_g, node_imp[batch.batch==12],
+                                #                 title="Node Importance")
                             # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
                             # print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
                         if args.only_neg:
@@ -287,7 +297,7 @@ def run_exp(args: Arguments):
                 reg = 0 #(node_imp ** 2).mean()
                 # print(expl_loss, ce_loss)
                 # pdb.set_trace()
-                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.005*reg
+                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 1e-3 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
 
                 opt.zero_grad()
                 loss.backward()
