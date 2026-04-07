@@ -745,11 +745,9 @@ def saliency_grad_diff(model, batch, epoch=None):
     x = batch.x.clone().requires_grad_(True)
 
     logits = model(x, batch.edge_index, batch.batch)
-    B, C = logits.shape
-    target = batch.y.to(logits.device).long()
-    idx = torch.arange(B, device=logits.device)
 
-    scalar = logits[idx, target].sum()
+    log_probs = torch.log_softmax(logits, dim=-1)
+    scalar = log_probs.sum()
     grads = torch.autograd.grad(
         scalar, x,
         create_graph=True,
@@ -806,7 +804,6 @@ def saliency_grad_diff(model, batch, epoch=None):
     #     title=f"Graph {g_id} (feature 1 dominant)"
     # )
 
-
     node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
     # import pdb;pdb.set_trace()
     # conf_mask = (batch.sp_order == 0) | (batch.sp_order == batch.sp_order.max())
@@ -836,7 +833,7 @@ def saliency_grad_diff(model, batch, epoch=None):
 
     aucs = []
     node_imp2 = node_imp.clone()
-
+    #
     if len(batch.batch.unique()) > 5 and model.training:
         available_g = np.random.choice(batch.batch.unique().cpu(), 5, replace=False)
     elif not model.training and epoch is not None:
@@ -854,7 +851,7 @@ def saliency_grad_diff(model, batch, epoch=None):
     else:
         aucs = None
 
-    saliency = grads.pow(2) #.abs()
+    saliency = grads.pow(2)#.abs()
     auc_value = float(np.mean(aucs)) if aucs is not None and len(aucs)>0 else None
 
     return node_imp2, saliency, auc_value

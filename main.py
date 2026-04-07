@@ -87,6 +87,7 @@ def run_exp(args: Arguments):
         batch_size = 16
 
     elif args.dataset == 'cmnist':
+
         dataset = CPatchMNIST.load(dataset_root="./data")
 
         class FilteredDataset(InMemoryDataset):
@@ -115,13 +116,12 @@ def run_exp(args: Arguments):
 
         in_dim = train_set[0].x.shape[1]
         out_dim = int(train_set.data.y.max()) + 1
-        batch_size = 128
+        batch_size = 256
 
     train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=False)
     val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 
-    torch.manual_seed(SEED)
     if args.explainer == "post":
         if args.model == 'gcn':
             model = GCN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
@@ -196,8 +196,8 @@ def run_exp(args: Arguments):
             neg_sum, neg_count = 0.0, 0
             conf_sum, conf_count = 0.0, 0
             for batch in train_loader:
-
                 batch = batch.to(DEVICE)
+
                 batch_size = batch.y.view(-1).size(0)
                 out = model(batch.x, batch.edge_index, batch.batch)
 
@@ -225,48 +225,59 @@ def run_exp(args: Arguments):
                     gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                     if args.explainer == "post":
-                        opt.zero_grad()
                         _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
 
                         node_imp = sal.sum(dim=1)
 
                         # positive mask: want high saliency
-                        pos_loss = -torch.mean(node_imp[gt_mask.bool()])
+                        pos_loss = -node_imp[gt_mask.bool()].sum()
                         # Negative mask: want low saliency
-                        neg_loss = torch.mean(node_imp[~gt_mask.bool()])
+                        neg_loss = node_imp[~gt_mask.bool()].sum()
+
+                        graphs_in_batch = batch.to_data_list()
+                        for i in range(batch_size):
+                            g0 = graphs_in_batch[i]
+                            mask = batch.batch == i
+                            auc_g = roc_auc_score(g0.node_label.bool().detach().numpy(),
+                                                  node_imp[mask].detach().numpy())
+                            # print(f'label {g0.y}, out {out[i,:].argmax()}, auc {auc_g}')
+                            average_aucs += auc_g
+
                         #
-                        if epoch % 2 == 0:
-                            # Positive nodes
-                            pos_vals = node_imp[gt_mask.bool()]
-                            pos_sum += pos_vals.sum().item()
-                            pos_count += pos_vals.numel()
+                        # if epoch % 2 == 0:
+                        #     # Positive nodes
+                        #     pos_vals = node_imp[gt_mask.bool()]
+                        #     pos_sum += pos_vals.sum().item()
+                        #     pos_count += pos_vals.numel()
+                        #     #
+                            # # Negative nodes
+                            # neg_vals = node_imp[~gt_mask.bool()]
+                            # neg_sum += neg_vals.sum().item()
+                            # neg_count += neg_vals.numel()
+                            #
+                            # if args.dataset == 'synth':
+                            #     conf_vals = node_imp[batch.conf_id]
+                            # else:
+                            #     for g in graph_indices:
+                            #         mask = (batch.batch == g)
+                            #
+                            #         local_sp = batch.sp_order[mask]
+                            #         conf_id = ((local_sp == 0) | (local_sp == local_sp.max())).nonzero(as_tuple=True)[0]
+                            #
+                            #         node_imp_g = node_imp[mask]
+                            #         conf_vals = node_imp_g[conf_id]
+                            #
+                            # conf_sum += conf_vals.sum().item()
+                            # conf_count += conf_vals.numel()
+                            # print(f"batch {cnt} positive sum {pos_vals.sum().item():.1f} negative sum {neg_vals.sum().item():.1f} conf sum {conf_vals.sum().item():.1f}")
+                            #
+                            # if (epoch == 2 and cnt <4) or (epoch > 7 and epoch % 5 ==0 and cnt <4):
+                            #     graphs_in_batch = batch.to_data_list()
+                            #     g0 = graphs_in_batch[12]
+                            #     mask = batch.batch == 12
+                            #     auc_g = roc_auc_score(g0.node_label.bool().detach().numpy(), node_imp[mask].detach().numpy())
+                            #     print(f'label {g0.y}, out {out[12,:].argmax()}, auc {auc_g}')
 
-                            # Negative nodes
-                            neg_vals = node_imp[~gt_mask.bool()]
-                            neg_sum += neg_vals.sum().item()
-                            neg_count += neg_vals.numel()
-
-                            if args.dataset == 'synth':
-                                conf_vals = node_imp[batch.conf_id]
-                            else:
-                                for g in graph_indices:
-                                    mask = (batch.batch == g)
-
-                                    local_sp = batch.sp_order[mask]
-                                    conf_id = ((local_sp == 0) | (local_sp == local_sp.max())).nonzero(as_tuple=True)[0]
-
-                                    node_imp_g = node_imp[mask]
-                                    conf_vals = node_imp_g[conf_id]
-
-                            conf_sum += conf_vals.sum().item()
-                            conf_count += conf_vals.numel()
-
-                            if epoch > -1 and cnt <4:
-                                graphs_in_batch = batch.to_data_list()
-                                g0 = graphs_in_batch[12]
-                                print(f'label {g0.y}, out {out[12,:].argmax()}')
-
-                                # # import pdb;pdb.set_trace()
                                 # motif_node_ids = torch.arange(sum(batch.batch==12))[batch.node_label[batch.batch==12].bool()]
                                 # conf_id_g = ((batch.sp_order[batch.batch==12] == 0) | (batch.sp_order[batch.batch==12] == batch.sp_order[batch.batch==12].max())).nonzero(as_tuple=True)[0]
                                 # plot_node_importance(g0, motif_node_ids, conf_id_g, node_imp[batch.batch==12],
@@ -274,9 +285,9 @@ def run_exp(args: Arguments):
                             # plot_g_tree(g0, trees, CID, node_imp[0:len(g0.y_color)])
                             # print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
                         if args.only_neg:
-                            expl_loss = neg_loss
+                            expl_loss = neg_loss / (node_imp.sum() + 1e-6)
                         else:
-                            expl_loss = neg_loss + pos_loss
+                            expl_loss = neg_loss / (node_imp.sum() + 1e-6) + pos_loss / (node_imp.sum() + 1e-6)
 
                         log_dict = {
                             'batch_expl_loss': expl_loss,
@@ -295,9 +306,13 @@ def run_exp(args: Arguments):
                         average_aucs += aucs
 
                 reg = 0 #(node_imp ** 2).mean()
-                # print(expl_loss, ce_loss)
-                # pdb.set_trace()
-                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 1e-3 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
+
+                expl_loss = torch.clamp(expl_loss, min=-1000, max=1000)
+                # if epoch <20:
+                #     lam_ce = 0.
+                # else:
+                #     lam_ce = args.lam_ce
+                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 1e-5 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
 
                 opt.zero_grad()
                 loss.backward()
@@ -317,10 +332,10 @@ def run_exp(args: Arguments):
             conf_avg = conf_sum / conf_count if conf_count > 0 else 0
 
             if epoch % 2 == 0:
-                print(f"Epoch {epoch}")
-                print("positives average:", pos_avg)
-                print("negatives average:", neg_avg)
-                print("confounder average:", conf_avg)
+                # print(f"Epoch {epoch}")
+                # print("positives average:", pos_avg)
+                # print("negatives average:", neg_avg)
+                # print("confounder average:", conf_avg)
 
                 log_dict = {
                     'positives average': pos_avg,
