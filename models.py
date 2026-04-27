@@ -167,7 +167,7 @@ class GATv2(nn.Module):
 
 
 class GIN(nn.Module):
-    def __init__(self, in_dim=7, hidden=128, out_dim=2, dropout=0.5):
+    def __init__(self, in_dim=7, hidden=256, out_dim=2, dropout=0):
         super().__init__()
 
         def make_mlp(in_dim, out_dim):

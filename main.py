@@ -235,13 +235,13 @@ def run_exp(args: Arguments):
                         neg_loss = node_imp[~gt_mask.bool()].sum()
 
                         graphs_in_batch = batch.to_data_list()
-                        for i in range(batch_size):
-                            g0 = graphs_in_batch[i]
-                            mask = batch.batch == i
-                            auc_g = roc_auc_score(g0.node_label.bool().detach().numpy(),
-                                                  node_imp[mask].detach().numpy())
-                            # print(f'label {g0.y}, out {out[i,:].argmax()}, auc {auc_g}')
-                            average_aucs += auc_g
+                        # for i in range(batch_size):
+                        #     g0 = graphs_in_batch[i]
+                        #     mask = batch.batch == i
+                        #     auc_g = roc_auc_score(g0.node_label.bool().detach().numpy(),
+                        #                           node_imp[mask].detach().numpy())
+                        #     # print(f'label {g0.y}, out {out[i,:].argmax()}, auc {auc_g}')
+                        #     average_aucs += auc_g
 
                         #
                         # if epoch % 2 == 0:
@@ -308,11 +308,11 @@ def run_exp(args: Arguments):
                 reg = 0 #(node_imp ** 2).mean()
 
                 expl_loss = torch.clamp(expl_loss, min=-1000, max=1000)
-                # if epoch <20:
-                #     lam_ce = 0.
-                # else:
-                #     lam_ce = args.lam_ce
-                loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 1e-5 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
+                if epoch <30:
+                    lam_ce = 0.
+                else:
+                    lam_ce = args.lam_ce
+                loss = lam_ce * ce_loss + args.lam_expl * expl_loss #+ 1e-5 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
 
                 opt.zero_grad()
                 loss.backward()
@@ -382,9 +382,11 @@ def run_exp(args: Arguments):
         total_test_acc = test_acc
         print(f"Test  | loss {test_loss:.3f} acc {test_acc:.3f}")
     elif args.mode == 'active-exp':
-        explained_idx = set()  # graphs with explanation labels
-        all_idx = {data.idx.item() for data in train_set}
-        # explained_idx.update(random.sample(all_idx, len(train_set)))  # If we want to pre-train expl
+        explained_gid = set()  # graphs with explanation labels
+        explained_pos = set()  # graphs with explanation labels
+        all_idx = set(range(len(train_set)))
+        explained_pos.update(random.sample(all_idx, 100))  # If we want to pre-train expl
+        explained_gid.update({train_set[i].idx.item() for i in explained_pos})
 
         per_round = args.per_round
         for rounds in range(args.rounds):
@@ -395,9 +397,11 @@ def run_exp(args: Arguments):
             # criterion = nn.CrossEntropyLoss()
             if rounds == 0:
                 tot_epoch = 5
+                lam_expl = 10*args.lam_expl
             else:
                 tot_epoch = args.epochs + 1
-            for epoch in range(1, tot_epoch):
+                lam_expl = args.lam_expl
+            for epoch in range(1, tot_epoch+1):
                 model.train()
 
                 correct = 0.
@@ -449,7 +453,7 @@ def run_exp(args: Arguments):
 
                     graph_ids = batch.idx
                     mask = torch.tensor(
-                        [gid.item() in explained_idx for gid in graph_ids],
+                        [gid.item() in explained_gid for gid in graph_ids],
                         device=batch.x.device
                     )
 
@@ -465,9 +469,9 @@ def run_exp(args: Arguments):
                             node_imp = sal.sum(dim=1)
                             reg = (node_imp ** 2).mean()
                             # positive mask: want high saliency
-                            pos_loss = -torch.mean(node_imp[gt_mask.bool()])
+                            pos_loss = -node_imp[gt_mask.bool()].sum()
                             # Negative mask: want low saliency
-                            neg_loss = torch.mean(node_imp[~gt_mask.bool()])
+                            neg_loss = node_imp[~gt_mask.bool()].sum()
 
                             # if rounds > 4 and epoch % 10 == 0 and cnttt == 0:
                             #     print('positives average: ',torch.mean(node_imp[gt_mask.bool()][0:6]))
@@ -482,9 +486,9 @@ def run_exp(args: Arguments):
                             # #     print(f'max node_imp {node_imp[0:len(g0.y_color)].max()},  and total average {node_imp[0:len(g0.y_color)].mean()}')
 
                             if args.only_neg:
-                                expl_loss_sup = neg_loss
+                                expl_loss_sup = (neg_loss) / (node_imp.sum() + 1e-8)
                             else:
-                                expl_loss_sup = neg_loss + pos_loss
+                                expl_loss_sup = (neg_loss + pos_loss) / (node_imp.sum() + 1e-8)
 
                             expl_loss = expl_loss_sup * mask.sum()/batch_size
                             cnttt += 1
@@ -507,7 +511,7 @@ def run_exp(args: Arguments):
                         expl_loss = torch.tensor(0.0, device=DEVICE)
                         reg = torch.tensor(0.0, device=DEVICE)
 
-                    loss = args.lam_ce * ce_loss + args.lam_expl * expl_loss #+ 0.01 * reg
+                    loss = args.lam_ce * ce_loss + lam_expl * expl_loss #+ 0.01 * reg
 
                     opt.zero_grad()
                     loss.backward()
@@ -555,30 +559,34 @@ def run_exp(args: Arguments):
                     print(f"train AUC {average_aucs:.3f} | val AUC {val_aucs: .3f}")
 
             # Chose graphs
-            pool = list(all_idx - explained_idx)
+            pool = list(all_idx - explained_pos)
             pool_dataset = torch.utils.data.Subset(train_set, pool)
-            pool_loader = DataLoader(pool_dataset, batch_size=16, shuffle=False)
+            pool_loader = DataLoader(pool_dataset, batch_size=256, shuffle=False)
 
             # scores_m = uncertainty_scores_logits(model, pool_loader, DEVICE, method=args.active)
             scores_e = uncertainty_scores_e(model, pool_loader, DEVICE, method=args.active)
-            chosen_id = select_topk(pool, scores_e, k=min(per_round, len(scores_e)))
+            chosen_pos = select_topk(pool, scores_e, k=min(per_round, len(scores_e)))
+            explained_pos.update(chosen_pos)
+
+            chosen_gid = {train_set[i].idx.item() for i in chosen_pos}
+            explained_gid.update(chosen_gid)
+
             # conf_len = []
             # for j in chosen_id:
             #     conf_len.append(len(train_set[j].conf_id))
             # print(f'conf len average {sum(conf_len)/len(conf_len)}')
             # wandb.log({'conf len': sum(conf_len)/len(conf_len)})
-            explained_idx.update(chosen_id)
 
             cpu_rng = torch.get_rng_state()
             cuda_rng = torch.cuda.get_rng_state() if torch.cuda.is_available() else None
 
             # # # plot the chosen graphs
-            chosen_dataset = torch.utils.data.Subset(train_set, chosen_id)
-            chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_id), shuffle=False, num_workers=0)
-            batch_c = next(iter(chosen_loader))
-
-            _, sal_c, _ = saliency_grad_diff(model, batch_c, epoch=None)
-            node_imp_c = sal_c.sum(dim=1)
+            # chosen_dataset = torch.utils.data.Subset(train_set, chosen_gid)
+            # chosen_loader = DataLoader(chosen_dataset, batch_size=len(chosen_gid), shuffle=False, num_workers=0)
+            # batch_c = next(iter(chosen_loader))
+            #
+            # _, sal_c, _ = saliency_grad_diff(model, batch_c, epoch=None)
+            # node_imp_c = sal_c.sum(dim=1)
 
             torch.set_rng_state(cpu_rng)
             if cuda_rng is not None:
