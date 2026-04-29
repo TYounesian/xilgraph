@@ -123,16 +123,28 @@ def run_exp(args: Arguments):
     test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False)
 
     if args.explainer == "post":
-        if args.model == 'gcn':
-            model = GCN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
-        elif args.model == 'gat':
-            model = GAT(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
-        elif args.model == 'gat2':
-            model = GATv2(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
-        elif args.model == 'gin':
-            model = GIN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
-        elif args.model == 'sage':
-            model = SAGE(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+        if args.dataset == 'cmnist':
+            if args.model == 'gcn':
+                model = GCN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'gat':
+                model = GAT(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'gat2':
+                model = GATv2(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'gin':
+                model = GIN(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'sage':
+                model = SAGE(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+        else:
+            if args.model == 'gcn':
+                model = GCN_SY(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'gat':
+                model = GAT_SY(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'gat2':
+                model = GATv2_SY(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'gin':
+                model = GIN_SY(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
+            elif args.model == 'sage':
+                model = SAGE_SY(in_dim=in_dim, out_dim=out_dim).to(DEVICE)
     elif args.explainer == "ante":
         if args.model == 'gin':
             model = SEGIN(in_dim=in_dim, out_dim=out_dim, disable_expl=args.lam_expl == 0.0).to(DEVICE)

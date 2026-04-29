@@ -1,3 +1,4 @@
+import pdb
 import sys
 
 import torch
@@ -925,8 +926,8 @@ def uncertainty_scores_e(model, pool, device, method="entropy"):
         node_imp = softmax(node_imp_raw, batch.batch, num_nodes=num_graphs)
 
         if method == "margin":
-            top2 = node_imp.topk(2, dim=-1).values
-            scores = 1.0 - (top2[:, 0] - top2[:, 1])
+            top2 = node_imp_raw.topk(2, dim=-1).values
+            scores = top2[0] - top2[1]
 
         elif method == "entropy":
             eps = 1e-12
