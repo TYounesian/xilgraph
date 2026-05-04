@@ -19,7 +19,7 @@ torch.set_num_threads(6)
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
-DEVICE = "cpu"
+DEVICE = "cuda:0"
 n_tree = 6
 NUM_GRAPHS = 1000
 N_NODES = 50          # base graph size
@@ -322,9 +322,11 @@ def run_exp(args: Arguments):
                 expl_loss = torch.clamp(expl_loss, min=-1000, max=1000)
                 if epoch <30:
                     lam_ce = 0.
+                    lam_expl = 10
                 else:
                     lam_ce = args.lam_ce
-                loss = lam_ce * ce_loss + args.lam_expl * expl_loss #+ 1e-5 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
+                    lam_expl = args.lam_expl
+                loss = lam_ce * ce_loss + lam_expl * expl_loss #+ 1e-5 * sum(p.pow(2).sum() for p in model.parameters()) #+ 0.005*reg
 
                 opt.zero_grad()
                 loss.backward()
@@ -383,7 +385,7 @@ def run_exp(args: Arguments):
 
             if epoch % 2 == 0:
                 print(f"Epoch {epoch:02d} | "
-                      f"train loss {total_loss:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
+                      f"train loss {total_loss:.3f} ce loss {total_ce:.3f} expl loss {total_expl:.5f} reg {reg:.5f} acc {tr_acc:.3f} | val loss "
                       f"{val_loss:.3f} val acc {val_acc:.3f} | test acc : {test_acc}")
                 if val_aucs is None:
                     val_aucs = 0

@@ -49,7 +49,7 @@ def add_colored_node(edge_index: torch.Tensor,
     """
     device = edge_index.device
     n = len(colors)
-    k = random.choice(range(1,25))
+    k = 1 #random.choice(range(1,25))
     new_ids = torch.arange(k) + n
 
     # append color
