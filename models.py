@@ -72,7 +72,7 @@ class SAGE(nn.Module):
 
 
 class GAT(nn.Module):
-    def __init__(self, in_dim=7, hidden=128, heads1=4, heads2=4, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
+    def __init__(self, in_dim=7, hidden=64, heads1=2, heads2=2, out_dim=2, attn_dropout=0.0, feat_dropout=0.0):
         super().__init__()
         self.gat1 = GATConv(
             in_channels=in_dim,
@@ -359,7 +359,7 @@ class GATv2_SY(nn.Module):
 
 
 class GIN_SY(nn.Module):
-    def __init__(self, in_dim=7, hidden=128, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
         super().__init__()
 
         nn1 = nn.Sequential(

@@ -19,7 +19,7 @@ torch.set_num_threads(6)
 SEED = 42
 random.seed(SEED)
 np.random.seed(SEED)
-DEVICE = "cuda:0"
+DEVICE = "cpu"
 n_tree = 6
 NUM_GRAPHS = 1000
 N_NODES = 50          # base graph size
@@ -50,6 +50,7 @@ class Arguments(Tap):
     only_neg: bool = False
     id_test: bool = False
     binary: bool = False
+    init_al: int = 100
 
 
 def run_exp(args: Arguments):
@@ -237,7 +238,7 @@ def run_exp(args: Arguments):
                     gt_mask = batch.motif_node_mask[node_mask].to(DEVICE).float() if args.dataset == 'synth' else batch.node_label.bool()[node_mask].to(DEVICE).float()
 
                     if args.explainer == "post":
-                        _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
+                        _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch, True)
 
                         node_imp = sal.sum(dim=1)
 
@@ -363,7 +364,7 @@ def run_exp(args: Arguments):
             test_loss, test_acc = run_epoch(model, test_loader, opt, criterion, epoch, train=False, device=DEVICE)
             val_batch = Batch.from_data_list(val_set).to(DEVICE)
             if args.explainer == "post":
-                _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
+                _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch, False)
             else:
                 expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
                 val_aucs = compute_plausibility(expl_attn_logit, val_batch)
@@ -399,7 +400,7 @@ def run_exp(args: Arguments):
         explained_gid = set()  # graphs with explanation labels
         explained_pos = set()  # graphs with explanation labels
         all_idx = set(range(len(train_set)))
-        explained_pos.update(random.sample(all_idx, 100))  # If we want to pre-train expl
+        explained_pos.update(random.sample(all_idx, args.init_al))  # If we want to pre-train expl
         explained_gid.update({train_set[i].idx.item() for i in explained_pos})
 
         per_round = args.per_round
@@ -478,7 +479,7 @@ def run_exp(args: Arguments):
 
                         if args.explainer == "post":
                             opt.zero_grad()
-                            _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch)
+                            _, sal, aucs = saliency_grad_diff(model, sub_batch, epoch, True)
 
                             node_imp = sal.sum(dim=1)
                             reg = (node_imp ** 2).mean()
@@ -548,7 +549,7 @@ def run_exp(args: Arguments):
 
                 if epoch % 5 == 0:
                     if args.explainer == "post":
-                        _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch)
+                        _, _, val_aucs = saliency_grad_diff(model, val_batch, epoch, False)
                     else:
                         expl_attn_logit, out = model(val_batch.x, val_batch.edge_index, val_batch.batch)
                         val_aucs = compute_plausibility(expl_attn_logit, val_batch)
@@ -560,6 +561,7 @@ def run_exp(args: Arguments):
                                 'loss_val': val_loss,
                                 'acc_tr': tr_acc,
                                 'acc_val': val_acc,
+                                'acc_test': test_acc,
                                 'train_auc': average_aucs,
                                 'val_auc': val_aucs}
                     wandb.log(log_dict)

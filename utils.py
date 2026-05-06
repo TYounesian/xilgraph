@@ -739,7 +739,7 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
     return q.clamp_min(eps)
 
 
-def saliency_grad_diff(model, batch, epoch=None):
+def saliency_grad_diff(model, batch, epoch=None, create_graph=True):
     # model.eval()
     # if batch.x.shape[1]>2:
     #     batch.x = batch.x[:, 3:]
@@ -751,8 +751,8 @@ def saliency_grad_diff(model, batch, epoch=None):
     scalar = log_probs.sum()
     grads = torch.autograd.grad(
         scalar, x,
-        create_graph=True,
-        retain_graph=True
+        create_graph=create_graph,
+        retain_graph=create_graph
     )[0]
     # model.train()
     #
@@ -919,7 +919,7 @@ def uncertainty_scores_e(model, pool, device, method="entropy"):
     for batch in pool:
         batch = batch.to(device)
 
-        _, sal, _ = saliency_grad_diff(model, batch, epoch=None)
+        _, sal, _ = saliency_grad_diff(model, batch, epoch=None, create_graph=False)
 
         node_imp_raw = sal.sum(dim=1)
         num_graphs = int(batch.y.size(0))
@@ -939,7 +939,7 @@ def uncertainty_scores_e(model, pool, device, method="entropy"):
 
                 H = -(p * (p + eps).log()).sum()
                 H_norm = H / torch.log(torch.tensor(float(N), device=p.device))
-                scores.append(H_norm)
+                scores.append(H_norm.detach().cpu())
 
         elif method == 'random':
             raw_scores = torch.ones(num_graphs)
