@@ -51,6 +51,7 @@ class Arguments(Tap):
     id_test: bool = False
     binary: bool = False
     init_al: int = 100
+    start_ep: int = 10
 
 
 def run_exp(args: Arguments):
@@ -321,7 +322,7 @@ def run_exp(args: Arguments):
                 reg = 0 #(node_imp ** 2).mean()
 
                 expl_loss = torch.clamp(expl_loss, min=-1000, max=1000)
-                if epoch <30:
+                if epoch <args.start_ep:
                     lam_ce = 0.
                     lam_expl = 10
                 else:

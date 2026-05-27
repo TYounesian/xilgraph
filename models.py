@@ -359,48 +359,78 @@ class GATv2_SY(nn.Module):
 
 
 class GIN_SY(nn.Module):
-    def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
+    def __init__(self, in_dim=7, hidden=64, out_dim=2, dropout=0.0):
+
         super().__init__()
 
-        nn1 = nn.Sequential(
-            nn.Linear(in_dim, hidden),
-            nn.ReLU(),
-        )
-        nn2 = nn.Sequential(
-            nn.Linear(hidden, hidden),
-            nn.ReLU(),
-        )
-        nn3 = nn.Sequential(
-            nn.Linear(hidden, hidden),
-            nn.ReLU(),
-        )
-        # nn4 = nn.Sequential(
-        #     nn.Linear(hidden, hidden),
-        #     nn.ReLU(),
-        # )
-        # nn5 = nn.Sequential(
-        #     nn.Linear(hidden, hidden),
-        #     nn.ReLU(),
-        # )
-
-        self.conv1 = GINConv(nn1)
-        self.conv2 = GINConv(nn2)
-        self.conv3 = GINConv(nn3)
-        # self.conv4 = GINConv(nn4)
-        # self.conv5 = GINConv(nn5)
-
+        def make_mlp(in_dim, out_dim):
+            return nn.Sequential(
+                nn.Linear(in_dim, out_dim),
+                nn.ReLU(),
+                nn.Linear(out_dim, out_dim),
+            )
+        # GIN layers
+        self.conv1 = GINConv(make_mlp(in_dim, hidden))
+        self.conv2 = GINConv(make_mlp(hidden, hidden))
+        self.conv3 = GINConv(make_mlp(hidden, hidden))
         self.dropout = nn.Dropout(dropout)
+        # Readout
         self.lin = nn.Linear(hidden, out_dim)
 
     def forward(self, x, edge_index, batch):
-        x = F.relu(self.conv1(x, edge_index))
-        x = self.dropout(x)
-        x = F.relu(self.conv2(x, edge_index))
-        x = self.dropout(x)
-        x = F.relu(self.conv3(x, edge_index))
-        x = self.dropout(x)
-        # x = F.relu(self.conv4(x, edge_index))
-        # x = self.dropout(x)
-        # x = F.relu(self.conv5(x, edge_index))
+        # Layer 1
+        x = self.conv1(x, edge_index)
+        # Layer 2
+        x = self.conv2(x, edge_index)
+        # Layer 3
+        x = self.conv3(x, edge_index)
         x = global_mean_pool(x, batch)
         return self.lin(x)
+
+#
+# class GIN_SY(nn.Module):
+#     def __init__(self, in_dim=7, hidden=100, out_dim=2, dropout=0):
+#         super().__init__()
+#
+#         nn1 = nn.Sequential(
+#             nn.Linear(in_dim, hidden),
+#             nn.ReLU(),
+#         )
+#         nn2 = nn.Sequential(
+#             nn.Linear(hidden, hidden),
+#             nn.ReLU(),
+#         )
+#         nn3 = nn.Sequential(
+#             nn.Linear(hidden, hidden),
+#             nn.ReLU(),
+#         )
+#         # nn4 = nn.Sequential(
+#         #     nn.Linear(hidden, hidden),
+#         #     nn.ReLU(),
+#         # )
+#         # nn5 = nn.Sequential(
+#         #     nn.Linear(hidden, hidden),
+#         #     nn.ReLU(),
+#         # )
+#
+#         self.conv1 = GINConv(nn1)
+#         self.conv2 = GINConv(nn2)
+#         self.conv3 = GINConv(nn3)
+#         # self.conv4 = GINConv(nn4)
+#         # self.conv5 = GINConv(nn5)
+#
+#         self.dropout = nn.Dropout(dropout)
+#         self.lin = nn.Linear(hidden, out_dim)
+#
+#     def forward(self, x, edge_index, batch):
+#         x = F.relu(self.conv1(x, edge_index))
+#         x = self.dropout(x)
+#         x = F.relu(self.conv2(x, edge_index))
+#         x = self.dropout(x)
+#         x = F.relu(self.conv3(x, edge_index))
+#         x = self.dropout(x)
+#         # x = F.relu(self.conv4(x, edge_index))
+#         # x = self.dropout(x)
+#         # x = F.relu(self.conv5(x, edge_index))
+#         x = global_mean_pool(x, batch)
+#         return self.lin(x)
