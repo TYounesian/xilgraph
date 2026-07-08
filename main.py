@@ -12,9 +12,10 @@ import math
 from datasets import CPatchMNIST
 from torch_geometric.data import InMemoryDataset
 import pdb
+from pathlib import Path
+
 
 torch.set_num_threads(6)
-
 
 SEED = 42
 random.seed(SEED)
@@ -63,6 +64,8 @@ def run_exp(args: Arguments):
     torch.manual_seed(SEED)
     random.seed(SEED)
     if args.dataset == 'synth':
+        cache_path = Path("graphs_by_splits.pt")
+
         trees = generate_trees(n_tree, tree_colors)
         graphs_by_splits = {}
         for split, n in n_splits.items():
@@ -79,6 +82,12 @@ def run_exp(args: Arguments):
 
             graphs_by_splits[split] = graphs
             # print(f'Percentage of graphs that already have at least one of the motifs: {motif_ex_count/n*100}')
+        if cache_path.exists():
+            print("loading data")
+            graphs_by_splits = torch.load(cache_path, weights_only=False)
+        else:
+            print("saving data")
+            torch.save(graphs_by_splits, cache_path)
 
         train_set = graphs_by_splits['train']
         val_set = graphs_by_splits['val']
@@ -324,7 +333,7 @@ def run_exp(args: Arguments):
                 expl_loss = torch.clamp(expl_loss, min=-1000, max=1000)
                 if epoch <args.start_ep:
                     lam_ce = 0.
-                    lam_expl = 10
+                    lam_expl = args.lam_expl
                 else:
                     lam_ce = args.lam_ce
                     lam_expl = args.lam_expl
