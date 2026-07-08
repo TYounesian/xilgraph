@@ -1,28 +1,21 @@
-import pdb
+import random
 import sys
 
-import torch
-from torch import nn
-from torch_geometric.data import Data
-import networkx as nx
-from torch_geometric.utils import to_networkx
-from networkx.algorithms.isomorphism import GraphMatcher, categorical_node_match
-import matplotlib.pyplot as plt
 import matplotlib
-import random
+import matplotlib.pyplot as plt
+import networkx as nx
 import numpy as np
-from torch_geometric.explain import Explainer
-# from graphxai.explainers import GradExplainer, GradCAM
-from torch_geometric.explain.algorithm import CaptumExplainer
-from torch_geometric.data import Batch
-from captum.attr import IntegratedGradients, Saliency
-from torch_geometric.nn import to_captum_model, to_captum_input
-import numpy as np
-from sklearn.metrics import roc_auc_score
+import torch
 import torch.nn.functional as F
+from captum.attr import Saliency
+from sklearn.metrics import roc_auc_score
+from torch import nn
+# from graphxai.explainers import GradExplainer, GradCAM
+from torch_geometric.data import Batch
+from torch_geometric.data import Data
+from torch_geometric.nn import to_captum_model, to_captum_input
 from torch_geometric.utils import softmax
-
-
+from torch_geometric.utils import to_networkx
 
 SEED = 42
 random.seed(SEED)
@@ -167,8 +160,8 @@ def make_graph(trees, G, CID, target_colors, split, confounder_flag):
     colors = torch.tensor([G.nodes[n]["color"] for n in G.nodes], dtype=torch.long)
 
     if split == "train":
-        attach_id = None #1000
-        conf_id = None #torch.tensor([1000])
+        attach_id = None
+        conf_id = None
         if confounder_flag:
             edge_index, colors, y, motif_node_ids, motif_edge_ids, attach_id, conf_id = add_motif_train_new_color(trees, edge_index, colors, CID)
         else:
@@ -413,11 +406,7 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
             node_imp = (ig_attr[0].squeeze().pow(2).sum(dim=1) + 1e-9).sqrt() #ig_attr[0].squeeze().abs().sum(dim=1) #exp.node_mask.abs().sum(dim=1)  # aggregate feature importance → [N]
             m, M = node_imp.min().detach(), node_imp.max().detach()
             node_imp = (node_imp - m) / (M - m + node_imp)
-            # node_imp = (node_imp - node_imp.min()) / (node_imp.max() - node_imp.min() + 1e-12)
-            # edge_imp = exp.edge_mask.detach().cpu()
             topk_nodes = torch.topk(node_imp, k=max(1, int(0.2 * node_imp.numel()))).indices.tolist()
-            # topk_edges = torch.topk(edge_imp, k=min(10, edge_imp.numel())).indices.tolist()
-            # print(f"[Captum][Graph {i}] target={target} | top nodes: {topk_nodes} | top edge idx: {topk_edges}")
 
             # check overlap:
 
@@ -428,13 +417,6 @@ def captum_explain_graphs(model, graphs, num_samples=5, method="IntegratedGradie
                 motif_e = torch.as_tensor(g.motif_edge_ids)
                 hit_e = 0 #torch.isin(torch.as_tensor(topk_edges), motif_e).float().mean().item()
                 total_hit_e += hit_e
-                # plot_node_importance(g, motif_n, node_imp, title="Captum Node Importance")
-                # print(f"motif node hit@top20% = {hit_n:.3f}, motif edge hit@top20% = {hit_e:.3f}")
-            # if hasattr(g, "attach_id"):
-            #     attach_n = torch.as_tensor(g.attach_id)
-            #     hit_n = sum(torch.isin(torch.as_tensor(topk_nodes), attach_n)).float()
-            #     total_hit_n += hit_n
-            #     print(f"Label: {g.y}, attach node hit@top20% = {hit_n:.3f}")
 
         return node_imp, total_hit_n/num_samples, total_hit_e/num_samples
 
@@ -551,7 +533,6 @@ def run_epoch(model, loader, opt, criterion, epoch, train: bool, device="cpu"):
     total, correct, loss_sum = 0, 0, 0.0
     cnttt = 0.
     for batch in loader:
-        # batch.x = batch.x[:, 3:]
         batch = batch.to(device)
         if train:
             opt.zero_grad()
@@ -560,16 +541,6 @@ def run_epoch(model, loader, opt, criterion, epoch, train: bool, device="cpu"):
         if type(out) is tuple:
             expl_attn_logit, out = out # separate explanation from target predictions
 
-        # plot all instances
-        # _, sal_b, _, _ = saliency_grad_diff(model, batch)
-        # node_imp_b = sal_b.sum(dim=1)
-        # chosen_mask = torch.ones(batch.y.view(-1).size(0))
-        # node_mask = chosen_mask[batch.batch].bool()
-        # gt_mask = batch.motif_node_mask[node_mask].float()
-        # pos_loss = -torch.mean(node_imp_b[gt_mask.bool()])
-        # # Negative mask: want low saliency
-        # neg_loss = torch.mean(node_imp_b[~gt_mask.bool()])
-        # expl_loss = pos_loss+neg_loss
         data_list = batch.to_data_list()
 
         # Plot each graph using ptr to slice node_imp correctly
@@ -741,8 +712,6 @@ def soft_target_from_mask_single(mask: torch.Tensor, eps: float = 1e-9):
 
 def saliency_grad_diff(model, batch, epoch=None, create_graph=True):
     # model.eval()
-    # if batch.x.shape[1]>2:
-    #     batch.x = batch.x[:, 3:]
     x = batch.x.clone().requires_grad_(True)
 
     logits = model(x, batch.edge_index, batch.batch)
@@ -806,7 +775,6 @@ def saliency_grad_diff(model, batch, epoch=None, create_graph=True):
     # )
 
     node_imp = (grads.pow(2).sum(dim=1) + 1e-9).sqrt()# [N], raw real-valued importance
-    # import pdb;pdb.set_trace()
     # conf_mask = (batch.sp_order == 0) | (batch.sp_order == batch.sp_order.max())
     # digit_mask = batch.node_label.bool()
     # graph_mask = (batch.batch == 0)
@@ -852,7 +820,7 @@ def saliency_grad_diff(model, batch, epoch=None, create_graph=True):
     else:
         aucs = None
 
-    saliency = grads.pow(2)#.abs()
+    saliency = grads.pow(2)
     auc_value = float(np.mean(aucs)) if aucs is not None and len(aucs)>0 else None
 
     return node_imp2, saliency, auc_value
@@ -860,9 +828,7 @@ def saliency_grad_diff(model, batch, epoch=None, create_graph=True):
 
 @torch.no_grad()
 def compute_plausibility(expl, batch):
-    hits = []
     aucs = []
-    node_imp2 = expl.clone()
 
     for g_id in batch.batch.unique():
         m = (batch.batch == g_id)  # nodes of this graph
